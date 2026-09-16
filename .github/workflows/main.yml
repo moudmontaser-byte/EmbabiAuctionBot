@@ -10,6 +10,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -32,7 +36,8 @@ jobs:
       - name: Install Android SDK 35
         shell: bash
         run: |
-          SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
+          SDKMANAGER="/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager"
+          echo "SDK Manager: $SDKMANAGER"
           test -x "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
           "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
@@ -49,81 +54,12 @@ jobs:
           echo "Project directory: $PROJECT_DIR"
           test -f "$PROJECT_DIR/settings.gradle"
           cd "$PROJECT_DIR"
-          gradle :app:assembleDebug --stacktrace --no-daemon
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: EmbabiAuctionBot-APK
-          path: extracted/**/app/build/outputs/apk/debug/*.apk          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
-
-          SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)
-
-          echo "SDK Manager found at:"
-          echo "$SDKMANAGER"
-
-          test -x "$SDKMANAGER"
-
-          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-
-          "$SDKMANAGER" \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-      - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
-
-      - name: Build APK
-        shell: bash
-        run: |
-          PROJECT_DIR=$(dirname "$(find extracted -type f -name settings.gradle -print -quit)")
-
-          echo "Project directory:"
-          echo "$PROJECT_DIR"
-
-          test -f "$PROJECT_DIR/settings.gradle"
-
-          cd "$PROJECT_DIR"
-
           gradle --version
           gradle :app:assembleDebug --stacktrace --no-daemon
 
-      - name: Find APK
-        run: |
-          echo "Generated APK files:"
-          find extracted -type f -name "*.apk" -print
-
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: EmbabiAuctionBot-APK
           path: extracted/**/app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error        run: |
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-
-      - name: Install Android SDK 35
-        run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
-
-      - name: Build APK
-        run: |
-          PROJECT_DIR=$(dirname "$(find extracted -name settings.gradle -print -quit)")
-          echo "Project directory: $PROJECT_DIR"
-          test -f "$PROJECT_DIR/settings.gradle"
-          cd "$PROJECT_DIR"
-          gradle :app:assembleDebug --stacktrace
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: EmbabiAuctionBot-APK
-          path: extracted/**/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
