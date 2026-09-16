@@ -42,6 +42,15 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
           "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
+      - name: Enable AndroidX
+        shell: bash
+        run: |
+          PROJECT_DIR=$(dirname "$(find extracted -type f -name settings.gradle -print -quit)")
+          echo "android.useAndroidX=true" >> "$PROJECT_DIR/gradle.properties"
+          echo "android.enableJetifier=true" >> "$PROJECT_DIR/gradle.properties"
+          echo "Gradle properties:"
+          cat "$PROJECT_DIR/gradle.properties"
+
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
