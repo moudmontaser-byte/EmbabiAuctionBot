@@ -15,13 +15,13 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Extract project
+        shell: bash
         run: |
-          ZIP_FILE=$(find . -maxdepth 1 -type f -name "EmbabiAuctionBot*.zip" | head -n 1)
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name 'EmbabiAuctionBot*.zip' | head -n 1)
           echo "Using ZIP: $ZIP_FILE"
           test -n "$ZIP_FILE"
           mkdir -p extracted
           unzip -o "$ZIP_FILE" -d extracted
-          find extracted -maxdepth 3 -type f | head -50
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
@@ -29,12 +29,33 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Configure and install Android SDK
+      - name: Install Android SDK 35
         shell: bash
         run: |
-          SDK_ROOT="/usr/local/lib/android/sdk"
+          SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build APK
+        shell: bash
+        run: |
+          PROJECT_DIR=$(dirname "$(find extracted -type f -name settings.gradle -print -quit)")
+          echo "Project directory: $PROJECT_DIR"
+          test -f "$PROJECT_DIR/settings.gradle"
+          cd "$PROJECT_DIR"
+          gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: EmbabiAuctionBot-APK
+          path: extracted/**/app/build/outputs/apk/debug/*.apk          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
 
           SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)
