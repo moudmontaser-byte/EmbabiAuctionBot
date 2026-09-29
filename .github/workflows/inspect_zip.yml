@@ -1,0 +1,32 @@
+name: Inspect legacy hidden-player-style source
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/inspect_zip.yml'
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect source ZIP
+        shell: bash
+        run: |
+          rm -rf /tmp/legacy
+          mkdir -p /tmp/legacy
+          unzip -q EmbabiAuctionBot_V0.1_CloudBuild.zip -d /tmp/legacy
+          echo "===== FILE TREE ====="
+          find /tmp/legacy -type f | sort
+          echo "===== SOURCE CONTENT ====="
+          while IFS= read -r f; do
+            case "$f" in
+              *.java|*.kt|*.xml|*.gradle|*.properties|*.md|*.txt)
+                echo "===== BEGIN: $f ====="
+                cat "$f"
+                echo
+                echo "===== END: $f ====="
+                ;;
+            esac
+          done < <(find /tmp/legacy -type f | sort)
