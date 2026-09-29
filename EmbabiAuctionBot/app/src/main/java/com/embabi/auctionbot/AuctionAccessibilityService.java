@@ -589,21 +589,24 @@ public class AuctionAccessibilityService extends AccessibilityService {
             final Integer[] vals = new Integer[4];
             final int[] done = {0};
 
-            IntResult finished = value -> {
-                int idx = done[0];
-                vals[idx] = value;
-                done[0]++;
-                if (done[0] == 4) {
-                    bmp.recycle();
-                    screenReadBusy = false;
-                    handleSnapshot(vals[0], vals[1], vals[2], vals[3]);
-                }
-            };
+            IntResult[] sinks = new IntResult[4];
+            for (int i = 0; i < 4; i++) {
+                final int index = i;
+                sinks[i] = value -> {
+                    vals[index] = value;
+                    done[0]++;
+                    if (done[0] == 4) {
+                        bmp.recycle();
+                        screenReadBusy = false;
+                        handleSnapshot(vals[0], vals[1], vals[2], vals[3]);
+                    }
+                };
+            }
 
-            ocrRect(bmp, Prefs.getRegion(this, "rating"), true, finished);
-            ocrRect(bmp, Prefs.getRegion(this, "price"), false, finished);
-            ocrRect(bmp, Prefs.getRegion(this, "mine"), false, finished);
-            ocrRect(bmp, Prefs.getRegion(this, "opponent"), false, finished);
+            ocrRect(bmp, Prefs.getRegion(this, "rating"), true, sinks[0]);
+            ocrRect(bmp, Prefs.getRegion(this, "price"), false, sinks[1]);
+            ocrRect(bmp, Prefs.getRegion(this, "mine"), false, sinks[2]);
+            ocrRect(bmp, Prefs.getRegion(this, "opponent"), false, sinks[3]);
         });
     }
 
@@ -1120,7 +1123,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
             if (calibrationStep >= 4) {
                 if (e.getAction() == MotionEvent.ACTION_DOWN) {
-                    h.post(() -> onCalibrationPoint(e.getRawX(), e.getRawY()));
+                    final float rawX = e.getRawX();
+                    final float rawY = e.getRawY();
+                    h.post(() -> onCalibrationPoint(rawX, rawY));
                 }
                 return true;
             }
