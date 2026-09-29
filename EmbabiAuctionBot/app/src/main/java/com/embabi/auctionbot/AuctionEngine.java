@@ -88,6 +88,28 @@ public class AuctionEngine {
     }
 
     public int getRound() { return round; }
+
+    // Screen-driven transition used by the v3 Accessibility bot.
+    // Called only after a result screen disappears and a new live auction screen is positively recognized.
+    public void advanceRoundFromScreen() {
+        if (complete) return;
+        if (round < 5) round++;
+        else {
+            complete = true;
+            return;
+        }
+        lastPrice = -1;
+        lastRating = -1;
+        lastMyBudget = -1;
+        lastOppBudget = -1;
+        invalidFrames = 0;
+        weLead = false;
+        pendingOwnBid = false;
+        transitionCandidate = false;
+        pendingBasePrice = -1;
+        pendingVerifyFrames = 0;
+        ownConfirmAt = 0L;
+    }
     public boolean isPendingOwnBid() { return pendingOwnBid; }
     public boolean isComplete() { return complete; }
     public OpponentProfiler getProfiler() { return profiler; }

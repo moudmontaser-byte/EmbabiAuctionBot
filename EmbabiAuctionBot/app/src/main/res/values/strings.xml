@@ -1,5 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Embabi Auction Genius</string>
-    <string name="accessibility_desc">Allows verified auction taps after screen analysis.</string>
+    <string name="accessibility_desc">يراقب شاشة مزاد Embabi Games، يقرأ التقييم والسعر والميزانيات داخل مناطق محددة، وينفذ + ثم Confirm فقط عند التحقق من حالة الشاشة.</string>
 </resources>
