@@ -11,15 +11,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect key UI and screen-reading source
+      - name: Inspect legacy screen-reading engine
         shell: bash
         run: |
           rm -rf /tmp/legacy
           mkdir -p /tmp/legacy
           unzip -q EmbabiAuctionBot_V0.1_CloudBuild.zip -d /tmp/legacy
-          BASE=/tmp/legacy/HiddenPlayerBot_v10/app/src/main/java/com/embabi/hiddenplayer
-          for f in MainActivity.java OverlayService.java HiddenPlayerAccessibilityService.java BotActions.java Prefs.java; do
-            echo "===== BEGIN $f ====="
-            cat "$BASE/$f"
-            echo "===== END $f ====="
-          done
+          F=/tmp/legacy/HiddenPlayerBot_v10/app/src/main/java/com/embabi/hiddenplayer/HiddenPlayerAccessibilityService.java
+          echo "LINES: $(wc -l < "$F")"
+          echo "===== PART 1 ====="
+          sed -n '1,320p' "$F"
+          echo "===== PART 2 ====="
+          sed -n '321,640p' "$F"
+          echo "===== PART 3 ====="
+          sed -n '641,1000p' "$F"
