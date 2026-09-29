@@ -45,6 +45,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: EmbabiAuctionGenius-v2-APK
+          name: EmbabiAuctionGenius-v3-APK
           path: EmbabiAuctionBot/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
