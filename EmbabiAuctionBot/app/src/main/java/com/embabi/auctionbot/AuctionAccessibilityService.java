@@ -1188,24 +1188,27 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
             final Integer[] vals = new Integer[4];
             final int[] done = {0};
-            IntResult finished = value -> {
-                int idx = done[0];
-                vals[idx] = value;
-                done[0]++;
-                if (done[0] == 4) {
-                    bmp.recycle();
-                    screenReadBusy = false;
-                    status("TEST OCR ✓  OVR " + show(vals[0]) +
-                            " | Price " + show(vals[1]) +
-                            " | You " + show(vals[2]) +
-                            " | Opp " + show(vals[3]));
-                }
-            };
+            IntResult[] sinks = new IntResult[4];
+            for (int i = 0; i < 4; i++) {
+                final int index = i;
+                sinks[i] = value -> {
+                    vals[index] = value;
+                    done[0]++;
+                    if (done[0] == 4) {
+                        bmp.recycle();
+                        screenReadBusy = false;
+                        status("TEST OCR ✓  OVR " + show(vals[0]) +
+                                " | Price " + show(vals[1]) +
+                                " | You " + show(vals[2]) +
+                                " | Opp " + show(vals[3]));
+                    }
+                };
+            }
 
-            ocrRect(bmp, Prefs.getRegion(this, "rating"), true, finished);
-            ocrRect(bmp, Prefs.getRegion(this, "price"), false, finished);
-            ocrRect(bmp, Prefs.getRegion(this, "mine"), false, finished);
-            ocrRect(bmp, Prefs.getRegion(this, "opponent"), false, finished);
+            ocrRect(bmp, Prefs.getRegion(this, "rating"), true, sinks[0]);
+            ocrRect(bmp, Prefs.getRegion(this, "price"), false, sinks[1]);
+            ocrRect(bmp, Prefs.getRegion(this, "mine"), false, sinks[2]);
+            ocrRect(bmp, Prefs.getRegion(this, "opponent"), false, sinks[3]);
         });
     }
 
