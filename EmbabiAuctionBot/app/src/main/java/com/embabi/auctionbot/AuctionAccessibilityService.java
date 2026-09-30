@@ -966,104 +966,81 @@ public class AuctionAccessibilityService extends AccessibilityService {
         SpatialNumbers out = new SpatialNumbers();
         if (tx == null || w <= 0 || h <= 0) return out;
 
-        float bestRatingScore = Float.MAX_VALUE;
-        float bestPriceScore = Float.MAX_VALUE;
-        float bestMineScore = Float.MAX_VALUE;
-        float bestOppScore = Float.MAX_VALUE;
+        float bestRating = Float.MAX_VALUE;
+        float bestPrice = Float.MAX_VALUE;
+        float bestMine = Float.MAX_VALUE;
+        float bestOpp = Float.MAX_VALUE;
 
         for (Text.TextBlock block : tx.getTextBlocks()) {
             for (Text.Line line : block.getLines()) {
+                ArrayList<Rect> rects = new ArrayList<>();
+                ArrayList<String> texts = new ArrayList<>();
+
                 Rect lr = line.getBoundingBox();
-                if (lr == null || lr.isEmpty() || ocrRectHitsOverlay(lr)) continue;
+                if (lr != null && !lr.isEmpty()) {
+                    rects.add(lr);
+                    texts.add(line.getText());
+                }
 
-                float nx = lr.centerX() / (float) w;
-                float ny = lr.centerY() / (float) h;
-                String txt = line.getText();
-                Integer num = numberFromText(txt, 0, 100);
+                for (Text.Element el : line.getElements()) {
+                    Rect er = el.getBoundingBox();
+                    if (er != null && !er.isEmpty()) {
+                        rects.add(er);
+                        texts.add(el.getText());
+                    }
+                }
 
-                if (num != null) {
-                    // Player rating: large card number on the left/upper-middle.
-                    if (num >= 50 && num <= 99 &&
-                            nx >= .08f && nx <= .46f &&
-                            ny >= .26f && ny <= .68f) {
-                        float score = Math.abs(nx - .24f) + Math.abs(ny - .43f);
-                        if (score < bestRatingScore) {
-                            bestRatingScore = score;
+                for (int k = 0; k < rects.size(); k++) {
+                    Rect r = rects.get(k);
+                    if (ocrRectHitsOverlay(r)) continue;
+
+                    String txt = texts.get(k);
+                    Integer num = numberFromText(txt, 0, 100);
+                    if (num == null) continue;
+
+                    float nx = r.centerX() / (float) w;
+                    float ny = r.centerY() / (float) h;
+                    float nh = r.height() / (float) h;
+
+                    if (num >= 80 && num <= 99 &&
+                            nx >= .10f && nx <= .43f &&
+                            ny >= .28f && ny <= .66f) {
+                        float distance = Math.abs(nx - .285f) + Math.abs(ny - .425f);
+                        float score = distance - nh * 3.2f;
+                        if (score < bestRating) {
+                            bestRating = score;
                             out.rating = num;
                         }
                     }
 
-                    // Current auction price: bottom-center auction control panel.
-                    if (num >= 0 && num <= 100 &&
-                            nx >= .24f && nx <= .76f &&
-                            ny >= .68f && ny <= .93f) {
-                        float score = Math.abs(nx - .50f) + Math.abs(ny - .79f);
-                        if (score < bestPriceScore) {
-                            bestPriceScore = score;
+                    if (num >= 1 && num <= 100 &&
+                            nx >= .28f && nx <= .72f &&
+                            ny >= .70f && ny <= .90f) {
+                        float distance = Math.abs(nx - .50f) + Math.abs(ny - .815f);
+                        String nt = normalize(txt);
+                        float moneyBonus = containsAny(nt, "m", "م", "€") ? .05f : 0f;
+                        float score = distance - nh * 2.2f - moneyBonus;
+                        if (score < bestPrice) {
+                            bestPrice = score;
                             out.price = num;
                         }
                     }
 
-                    // Our / opponent budgets: top scoreboard.
-                    if (num >= 0 && num <= 100 &&
-                            ny >= .10f && ny <= .30f) {
-                        if (nx < .50f) {
-                            float score = Math.abs(nx - .27f) + Math.abs(ny - .19f);
-                            if (score < bestMineScore) {
-                                bestMineScore = score;
+                    if (num >= 1 && num <= 100 &&
+                            ny >= .135f && ny <= .285f) {
+                        if (nx >= .06f && nx <= .46f) {
+                            float distance = Math.abs(nx - .275f) + Math.abs(ny - .205f);
+                            float score = distance - nh * 1.4f;
+                            if (score < bestMine) {
+                                bestMine = score;
                                 out.mine = num;
                             }
-                        } else {
-                            float score = Math.abs(nx - .73f) + Math.abs(ny - .19f);
-                            if (score < bestOppScore) {
-                                bestOppScore = score;
+                        } else if (nx >= .54f && nx <= .94f) {
+                            float distance = Math.abs(nx - .725f) + Math.abs(ny - .205f);
+                            float score = distance - nh * 1.4f;
+                            if (score < bestOpp) {
+                                bestOpp = score;
                                 out.opp = num;
-                            }
-                        }
-                    }
-                }
-
-                // Element-level pass catches split OCR like "€" + "8M".
-                for (Text.Element el : line.getElements()) {
-                    Rect er = el.getBoundingBox();
-                    if (er == null || er.isEmpty() || ocrRectHitsOverlay(er)) continue;
-
-                    float ex = er.centerX() / (float) w;
-                    float ey = er.centerY() / (float) h;
-                    Integer ev = numberFromText(el.getText(), 0, 100);
-                    if (ev == null) continue;
-
-                    if (ev >= 50 && ev <= 99 &&
-                            ex >= .08f && ex <= .46f &&
-                            ey >= .26f && ey <= .68f) {
-                        float score = Math.abs(ex - .24f) + Math.abs(ey - .43f);
-                        if (score < bestRatingScore) {
-                            bestRatingScore = score;
-                            out.rating = ev;
-                        }
-                    }
-
-                    if (ex >= .24f && ex <= .76f &&
-                            ey >= .68f && ey <= .93f) {
-                        float score = Math.abs(ex - .50f) + Math.abs(ey - .79f);
-                        if (score < bestPriceScore) {
-                            bestPriceScore = score;
-                            out.price = ev;
-                        }
-                    }
-
-                    if (ey >= .10f && ey <= .30f) {
-                        if (ex < .50f) {
-                            float score = Math.abs(ex - .27f) + Math.abs(ey - .19f);
-                            if (score < bestMineScore) {
-                                bestMineScore = score;
-                                out.mine = ev;
-                            }
-                        } else {
-                            float score = Math.abs(ex - .73f) + Math.abs(ey - .19f);
-                            if (score < bestOppScore) {
-                                bestOppScore = score;
-                                out.opp = ev;
                             }
                         }
                     }
@@ -1073,6 +1050,44 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         return out;
     }
+
+    private int detectBottomAuctionTurn(Text tx, int w, int h) {
+        if (tx == null || w <= 0 || h <= 0) return 0;
+
+        boolean sawConfirm = false;
+        boolean sawWaiting = false;
+
+        for (Text.TextBlock block : tx.getTextBlocks()) {
+            for (Text.Line line : block.getLines()) {
+                Rect r = line.getBoundingBox();
+                if (r == null || r.isEmpty() || ocrRectHitsOverlay(r)) continue;
+
+                float ny = r.centerY() / (float) h;
+                if (ny < .76f) continue;
+
+                String t = normalize(line.getText());
+
+                if (containsAny(t,
+                        "تأكيد المزايدة", "تاكيد المزايده",
+                        "تأكيد مزايدة", "تاكيد مزايدة",
+                        "confirm bid", "confirm")) {
+                    sawConfirm = true;
+                }
+
+                if (containsAny(t,
+                        "انتظار المزايدة", "انتظار المزايده",
+                        "بانتظار المزايدة", "بانتظار المزايده",
+                        "waiting bid", "waiting for bid")) {
+                    sawWaiting = true;
+                }
+            }
+        }
+
+        if (sawConfirm) return 1;
+        if (sawWaiting) return 2;
+        return 0;
+    }
+
 
     private void readAuctionSnapshot(boolean allowAction) {
         if (screenReadBusy || bidFlowInProgress) return;
