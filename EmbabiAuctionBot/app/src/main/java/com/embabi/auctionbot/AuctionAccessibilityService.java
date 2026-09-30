@@ -42,6 +42,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private boolean scanQueued = false;
     private boolean screenshotBusy = false;
     private boolean screenReadBusy = false;
+    private boolean turnVisualBusy = false;
 
     private boolean resultWaiting = false;
     private boolean bidFlowInProgress = false;
@@ -369,13 +370,21 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
 
         // ---------- Turn detection ----------
+        // New GUI rule: the strongest signal for OUR turn is the green/enabled
+        // "تأكيد المزايدة" button. Text such as "دورك" is only a secondary signal.
         boolean opponentTurn = containsAny(all,
                 "دور الخصم", "الدور خصمك", "الدور: خصمك", "خصمك يزايد", "خصمك يختار",
                 "opponent turn", "opponent's turn");
 
-        boolean myTurn = containsAny(all,
+        boolean myTurnText = containsAny(all,
                 "دورك", "دورك الان", "دورك الآن", "الدور انت", "الدور: انت",
                 "زايد الان", "زايد الآن", "your turn");
+
+        AccessibilityNodeInfo confirmTurnNode = findVisibleTextAny(root,
+                "تأكيد المزايدة", "تاكيد المزايده", "تأكيد مزايدة", "تاكيد مزايدة",
+                "confirm bid", "confirm");
+        boolean confirmEnabled = confirmTurnNode != null && isEnabledClickable(confirmTurnNode);
+        boolean myTurn = confirmEnabled || myTurnText;
 
         if (opponentTurn && !myTurn) {
             if (awaitingConfirm) {
@@ -384,31 +393,126 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 Prefs.setBotPaused(this, true);
                 status("الدور اتغير قبل ما Confirm يتأكد — SAFETY PAUSE");
             } else {
-                status("دور الخصم — لا ألمس أي شيء، أراقب الشاشة");
+                status("دور الخصم — زر تأكيد المزايدة غير مفعّل، لا ألمس أي شيء");
             }
             return;
         }
 
         if (awaitingConfirm) {
-            if (!myTurn) {
-                status("Plus اتنفذ — لكن لن أضغط Confirm إلا لما أتأكد أن الدور دوري");
-                return;
+            if (confirmEnabled || myTurnText) {
+                verifyConfirmReady(root);
+            } else if (activeAuction) {
+                // Some WebViews do not expose enabled/disabled state to Accessibility.
+                // In that case verify the calibrated Confirm button visually.
+                verifyTurnByConfirmVisual(true);
             }
-            verifyConfirmReady(root);
             return;
         }
 
         if (myTurn && activeAuction) {
+            status(confirmEnabled
+                    ? "زر تأكيد المزايدة مفعّل ✓ — ده دورنا، أقرأ اللاعب والسعر"
+                    : "الدور دوري ✓ — أقرأ اللاعب والسعر");
             readAuctionSnapshot();
             return;
         }
 
         if (activeAuction) {
-            status("المزاد ظاهر — لكن لم أتأكد أن الدور دوري، لذلك لا ألمس شيء");
+            // Do not give up just because the page did not expose "دورك".
+            // The new auction GUI uses the Confirm button state, so inspect its color.
+            verifyTurnByConfirmVisual(false);
             return;
         }
 
         status("أراقب الشاشة… في انتظار حالة معروفة");
+    }
+
+    private void verifyTurnByConfirmVisual(boolean forPendingConfirm) {
+        if (turnVisualBusy || screenReadBusy || screenshotBusy) return;
+        if (Prefs.getPoint(this, "confirm") == null) {
+            status("زر تأكيد المزايدة غير معروف — اعمل CAL مرة واحدة");
+            return;
+        }
+
+        turnVisualBusy = true;
+        captureBitmap(bmp -> {
+            turnVisualBusy = false;
+
+            if (bmp == null) {
+                status("المزاد ظاهر لكن Screenshot غير متاح — بدون أي كليك");
+                return;
+            }
+
+            boolean green = isConfirmVisuallyActive(bmp);
+            bmp.recycle();
+
+            if (green) {
+                if (forPendingConfirm) {
+                    status("زر تأكيد المزايدة أخضر/مفعّل ✓ — أكمل Confirm");
+                    AccessibilityNodeInfo nowRoot = getRootInActiveWindow();
+                    verifyConfirmReady(nowRoot);
+                } else {
+                    status("زر تأكيد المزايدة أخضر ✓ — ده دورنا");
+                    readAuctionSnapshot();
+                }
+            } else {
+                status("المزاد ظاهر لكن زر تأكيد المزايدة غير مفعّل — أراقب فقط");
+            }
+        });
+    }
+
+    private boolean isConfirmVisuallyActive(Bitmap bmp) {
+        PointF p = Prefs.getPoint(this, "confirm");
+        if (bmp == null || p == null) return false;
+
+        int cx = Math.round(p.x * bmp.getWidth());
+        int cy = Math.round(p.y * bmp.getHeight());
+
+        int rx = Math.max(24, Math.round(bmp.getWidth() * .13f));
+        int ry = Math.max(14, Math.round(bmp.getHeight() * .025f));
+
+        int l = Math.max(0, cx - rx);
+        int r = Math.min(bmp.getWidth() - 1, cx + rx);
+        int t = Math.max(0, cy - ry);
+        int b = Math.min(bmp.getHeight() - 1, cy + ry);
+
+        int sx = Math.max(1, (r - l) / 42);
+        int sy = Math.max(1, (b - t) / 16);
+
+        int greenPixels = 0;
+        int useful = 0;
+        long sumR = 0, sumG = 0, sumB = 0;
+
+        for (int y = t; y <= b; y += sy) {
+            for (int x = l; x <= r; x += sx) {
+                int c = bmp.getPixel(x, y);
+                int rr = Color.red(c);
+                int gg = Color.green(c);
+                int bb = Color.blue(c);
+
+                // Skip near-white text and very dark shadow pixels.
+                if (rr > 225 && gg > 225 && bb > 225) continue;
+                if (rr < 25 && gg < 25 && bb < 25) continue;
+
+                useful++;
+                sumR += rr;
+                sumG += gg;
+                sumB += bb;
+
+                if (gg >= 95 && gg > rr + 28 && gg > bb + 16) greenPixels++;
+            }
+        }
+
+        if (useful < 20) return false;
+
+        double greenRatio = (double) greenPixels / useful;
+        double avgR = (double) sumR / useful;
+        double avgG = (double) sumG / useful;
+        double avgB = (double) sumB / useful;
+
+        // The active Confirm button in the new GUI is strongly green.
+        return greenRatio >= .24 ||
+                (avgG >= 95 && avgG > avgR + 24 && avgG > avgB + 12);
     }
 
     private boolean isTargetPackage(AccessibilityNodeInfo root) {
