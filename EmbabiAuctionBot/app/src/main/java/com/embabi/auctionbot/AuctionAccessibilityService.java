@@ -1059,6 +1059,13 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private void readAuctionSnapshot(boolean allowAction) {
         if (screenReadBusy || bidFlowInProgress) return;
 
+        if (!Prefs.isCalibrated(this)) {
+            paused = true;
+            Prefs.setBotPaused(this, true);
+            status("اعمل CAL للـ + و Confirm مرة واحدة");
+            return;
+        }
+
         AccessibilityNodeInfo root = getRootInActiveWindow();
         String rawTree = root == null ? "" : collectText(root);
         NumericHints hints = parseNumericHints(rawTree);
@@ -1069,16 +1076,15 @@ public class AuctionAccessibilityService extends AccessibilityService {
             if (bmp == null) {
                 screenReadBusy = false;
 
-                Integer rating = hints.rating;
-                Integer price = hints.price;
-                Integer mine = hints.mine;
-                Integer opp = hints.opp;
-
-                if (rating != null && price != null) {
-                    handleSnapshot(rating, price, mine, opp, allowAction);
+                if (hints.rating != null && hints.price != null) {
+                    handleSnapshot(
+                            hints.rating,
+                            hints.price,
+                            hints.mine,
+                            hints.opp,
+                            allowAction
+                    );
                 } else {
-                    stableCandidate = null;
-                    stableCandidateCount = 0;
                     status("تعذر Screenshot ولم أجد Rating/Price موثوقين — بدون كليك");
                 }
                 return;
@@ -1086,69 +1092,47 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
             recognizer.process(InputImage.fromBitmap(bmp, 0))
                     .addOnSuccessListener(fullTx -> {
-                        SpatialNumbers spatial =
+                        SpatialNumbers n =
                                 extractSpatialAuctionNumbers(fullTx, bmp.getWidth(), bmp.getHeight());
+                        bmp.recycle();
+                        screenReadBusy = false;
 
-                        // Spatial full-screen OCR is primary. It avoids a bad manual box
-                        // silently pointing at the wrong number.
-                        Integer spatialRating = spatial.rating;
-                        Integer spatialPrice = spatial.price;
-                        Integer spatialMine = spatial.mine;
-                        Integer spatialOpp = spatial.opp;
+                        Integer rating = n.rating != null ? n.rating : hints.rating;
 
-                        final Integer[] vals = new Integer[4];
-                        final int[] done = {0};
+                        Integer price = n.price != null && n.price > 0
+                                ? n.price
+                                : (hints.price != null && hints.price > 0 ? hints.price : null);
 
-                        IntResult[] sinks = new IntResult[4];
-                        for (int i = 0; i < 4; i++) {
-                            final int index = i;
-                            sinks[i] = value -> {
-                                vals[index] = value;
-                                done[0]++;
+                        Integer mine = n.mine != null && n.mine > 0
+                                ? n.mine
+                                : (hints.mine != null && hints.mine > 0 ? hints.mine : null);
 
-                                if (done[0] == 4) {
-                                    bmp.recycle();
-                                    screenReadBusy = false;
+                        Integer opp = n.opp != null && n.opp > 0
+                                ? n.opp
+                                : (hints.opp != null && hints.opp > 0 ? hints.opp : null);
 
-                                    Integer rating = spatialRating != null
-                                            ? spatialRating
-                                            : (vals[0] != null ? vals[0] : hints.rating);
+                        status("AUTO OCR: OVR " + show(rating) +
+                                " | Price " + show(price) +
+                                " | You " + show(mine) +
+                                " | Opp " + show(opp));
 
-                                    Integer price = spatialPrice != null && spatialPrice > 0
-                                            ? spatialPrice
-                                            : (hints.price != null && hints.price > 0
-                                                ? hints.price : vals[1]);
-
-                                    Integer mine = spatialMine != null && spatialMine > 0
-                                            ? spatialMine
-                                            : (hints.mine != null && hints.mine > 0
-                                                ? hints.mine : vals[2]);
-
-                                    Integer opp = spatialOpp != null && spatialOpp > 0
-                                            ? spatialOpp
-                                            : (hints.opp != null && hints.opp > 0
-                                                ? hints.opp : vals[3]);
-
-                                    status("AUTO OCR: OVR " + show(rating) +
-                                            " | Price " + show(price) +
-                                            " | You " + show(mine) +
-                                            " | Opp " + show(opp));
-
-                                    handleSnapshot(rating, price, mine, opp, allowAction);
-                                }
-                            };
-                        }
-
-                        // Manual boxes are now fallback only.
-                        ocrRect(bmp, Prefs.getRegion(this, "rating"), true, sinks[0]);
-                        ocrRect(bmp, Prefs.getRegion(this, "price"), false, sinks[1]);
-                        ocrRect(bmp, Prefs.getRegion(this, "mine"), false, sinks[2]);
-                        ocrRect(bmp, Prefs.getRegion(this, "opponent"), false, sinks[3]);
+                        handleSnapshot(rating, price, mine, opp, allowAction);
                     })
                     .addOnFailureListener(e -> {
                         bmp.recycle();
                         screenReadBusy = false;
-                        status("Full-screen OCR فشل — بدون كليك");
+
+                        if (hints.rating != null && hints.price != null) {
+                            handleSnapshot(
+                                    hints.rating,
+                                    hints.price,
+                                    hints.mine,
+                                    hints.opp,
+                                    allowAction
+                            );
+                        } else {
+                            status("Full-screen OCR فشل — بدون كليك");
+                        }
                     });
         });
     }
