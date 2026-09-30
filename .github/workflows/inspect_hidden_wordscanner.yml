@@ -1,0 +1,22 @@
+name: Inspect HiddenPlayer word-scanner
+on:
+  workflow_dispatch:
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect
+        shell: bash
+        run: |
+          rm -rf /tmp/legacy && mkdir -p /tmp/legacy
+          unzip -q EmbabiAuctionBot_V0.1_CloudBuild.zip -d /tmp/legacy
+          F=/tmp/legacy/HiddenPlayerBot_v10/app/src/main/java/com/embabi/hiddenplayer/HiddenPlayerAccessibilityService.java
+          echo '===== TAKE SCREENSHOT / OCR / WORD SEARCH ====='
+          grep -n -E "takeScreenshot|TextRecognition|recognizer|BoundingBox|find.*Text|scroll|swipe|return|home|main|result|lineup" "$F" | head -220
+          echo '===== METHODS AROUND OCR ====='
+          L=$(grep -n "takeScreenshot" "$F" | head -1 | cut -d: -f1)
+          [ -z "$L" ] && L=1
+          S=$((L-60)); [ $S -lt 1 ] && S=1
+          E=$((L+420))
+          sed -n "${S},${E}p" "$F"
