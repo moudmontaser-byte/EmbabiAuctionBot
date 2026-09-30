@@ -1882,9 +1882,10 @@ public class AuctionAccessibilityService extends AccessibilityService {
         removeFloatingOverlay();
         removeCalibration();
 
-        // Starting CAL means starting from zero. Never keep old OCR boxes alive.
+        // v16+: the four numeric fields are read automatically from the screen.
+        // CAL only stores the two exact physical buttons: + then Confirm.
         Prefs.clearCalibration(this);
-        calibrationStep = 0;
+        calibrationStep = 4;
         showCalibrationStep();
     }
 
@@ -1963,15 +1964,12 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private String calibrationLabel() {
-        switch (calibrationStep) {
-            case 0: return "1/6 — ارسم مربعًا حول Rating اللاعب فقط";
-            case 1: return "2/6 — ارسم مربعًا حول Current Auction Price فقط";
-            case 2: return "3/6 — ارسم مربعًا حول ميزانيتك فقط";
-            case 3: return "4/6 — ارسم مربعًا حول ميزانية الخصم فقط";
-            case 4: return "5/6 — المس منتصف زر + مرة واحدة";
-            default: return "6/6 — المس منتصف زر Confirm مرة واحدة";
+        if (calibrationStep == 4) {
+            return "1/2 — المس منتصف زر + مرة واحدة";
         }
+        return "2/2 — المس منتصف زر تأكيد المزايدة مرة واحدة";
     }
+
 
     private void onCalibrationPoint(float x, float y) {
         if (calibrationStep < 4 || calibrationStep > 5) return;
@@ -1992,7 +1990,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
             removeCalibration();
             showFloatingOverlay(true);
             status(Prefs.isCalibrated(this)
-                    ? "CAL كامل 6/6 ✓ — شغّل TEST OCR ثم START"
+                    ? "CAL كامل 2/2 ✓ — + و Confirm محفوظين بالبكسل الحقيقي"
                     : "المعايرة غير مكتملة — أعد CAL");
         } else {
             showCalibrationStep();
@@ -2157,44 +2155,40 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private void testOcr() {
         if (!Prefs.isCalibrated(this)) {
-            status("TEST OCR: المعايرة ناقصة");
+            status("TEST: اعمل CAL للـ + و Confirm أولًا");
             return;
         }
 
-        status("TEST OCR… أقرأ الأربع مربعات");
+        status("TEST AUTO OCR… أقرأ الشاشة كاملة");
         screenReadBusy = true;
+
         captureBitmap(bmp -> {
             if (bmp == null) {
                 screenReadBusy = false;
-                status("TEST OCR: تعذر أخذ Screenshot");
+                status("TEST AUTO OCR: تعذر أخذ Screenshot");
                 return;
             }
 
-            final Integer[] vals = new Integer[4];
-            final int[] done = {0};
-            IntResult[] sinks = new IntResult[4];
-            for (int i = 0; i < 4; i++) {
-                final int index = i;
-                sinks[i] = value -> {
-                    vals[index] = value;
-                    done[0]++;
-                    if (done[0] == 4) {
+            recognizer.process(InputImage.fromBitmap(bmp, 0))
+                    .addOnSuccessListener(tx -> {
+                        SpatialNumbers n =
+                                extractSpatialAuctionNumbers(tx, bmp.getWidth(), bmp.getHeight());
                         bmp.recycle();
                         screenReadBusy = false;
-                        status("TEST OCR ✓  OVR " + show(vals[0]) +
-                                " | Price " + show(vals[1]) +
-                                " | You " + show(vals[2]) +
-                                " | Opp " + show(vals[3]));
-                    }
-                };
-            }
 
-            ocrRect(bmp, Prefs.getRegion(this, "rating"), true, sinks[0]);
-            ocrRect(bmp, Prefs.getRegion(this, "price"), false, sinks[1]);
-            ocrRect(bmp, Prefs.getRegion(this, "mine"), false, sinks[2]);
-            ocrRect(bmp, Prefs.getRegion(this, "opponent"), false, sinks[3]);
+                        status("TEST AUTO OCR ✓  OVR " + show(n.rating) +
+                                " | Price " + show(n.price) +
+                                " | You " + show(n.mine) +
+                                " | Opp " + show(n.opp));
+                    })
+                    .addOnFailureListener(e -> {
+                        bmp.recycle();
+                        screenReadBusy = false;
+                        status("TEST AUTO OCR: فشل OCR");
+                    });
         });
     }
+
 
     // ---------- Floating overlay ----------
 
