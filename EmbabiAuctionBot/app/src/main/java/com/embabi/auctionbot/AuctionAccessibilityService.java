@@ -2491,6 +2491,38 @@ public class AuctionAccessibilityService extends AccessibilityService {
         return null;
     }
 
+    private void moveOverlayAwayFromPoint(float x, float y) {
+        if (floatingView == null || floatingLp == null || wm == null ||
+                floatingView.getWidth() <= 0 || floatingView.getHeight() <= 0) {
+            return;
+        }
+
+        Rect ov = new Rect(
+                floatingLp.x,
+                floatingLp.y,
+                floatingLp.x + floatingView.getWidth(),
+                floatingLp.y + floatingView.getHeight()
+        );
+
+        if (!ov.contains(Math.round(x), Math.round(y))) return;
+
+        int screenW = getResources().getDisplayMetrics().widthPixels;
+        int margin = dp(6);
+
+        // Keep the user's overlay visible, but move it away only when it would
+        // physically cover the calibrated game button.
+        if (x < screenW / 2f) {
+            floatingLp.x = Math.max(margin, screenW - floatingView.getWidth() - margin);
+        } else {
+            floatingLp.x = margin;
+        }
+        floatingLp.y = dp(62);
+        overlaySavedX = floatingLp.x;
+        overlaySavedY = floatingLp.y;
+
+        try { wm.updateViewLayout(floatingView, floatingLp); } catch (Exception ignored) {}
+    }
+
     private void tapSavedPoint(String key, Callback cb) {
         Rect bounds = Build.VERSION.SDK_INT >= 30
                 ? wm.getMaximumWindowMetrics().getBounds()
@@ -2501,6 +2533,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         PointF px = Prefs.getTapPointPx(this, key, bounds.width(), bounds.height());
 
         if (px != null) {
+            moveOverlayAwayFromPoint(px.x, px.y);
             dispatchTapPx(px.x, px.y,
                     () -> cb.onDone(true),
                     () -> cb.onDone(false));
@@ -2513,9 +2546,12 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
+        float tx = bounds.left + p.x * bounds.width();
+        float ty = bounds.top + p.y * bounds.height();
+        moveOverlayAwayFromPoint(tx, ty);
         dispatchTapPx(
-                bounds.left + p.x * bounds.width(),
-                bounds.top + p.y * bounds.height(),
+                tx,
+                ty,
                 () -> cb.onDone(true),
                 () -> cb.onDone(false));
     }
