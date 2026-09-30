@@ -463,7 +463,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
-        status("أراقب الشاشة… في انتظار حالة معروفة");
+        verifyTurnLabelByOcr();
     }
 
     private Integer extractGuiRound(String all) {
