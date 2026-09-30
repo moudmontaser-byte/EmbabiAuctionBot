@@ -6,6 +6,7 @@ import android.graphics.PointF;
 import android.graphics.RectF;
 
 public final class Prefs {
+    private static final int CALIBRATION_SCHEMA = 16;
     private static final String NAME = "auction_genius";
     private static final int[] DEFAULT_MIN = {84, 85, 85, 85, 86};
 
@@ -112,20 +113,24 @@ public final class Prefs {
     }
 
     public static boolean isCalibrated(Context c) {
+        SharedPreferences p = sp(c);
+
+        // Do not ever reuse partial/old calibration from an older build.
+        if (p.getInt("calibration_schema", 0) != CALIBRATION_SCHEMA) return false;
+
         for (String key : ROI_KEYS) {
             RectF r = getRegion(c, key);
             if (r == null || r.width() < .015f || r.height() < .012f) return false;
         }
 
-        SharedPreferences p = sp(c);
-
-        // v12+: old normalized tap points are intentionally not enough.
-        // Force one fresh CAL so + and Confirm use the exact raw pixels touched
-        // on this phone/orientation.
         boolean rawPlus = p.contains("px_x_plus") && p.contains("px_y_plus");
         boolean rawConfirm = p.contains("px_x_confirm") && p.contains("px_y_confirm");
 
         return rawPlus && rawConfirm;
+    }
+
+    public static void markCalibrationComplete(Context c) {
+        sp(c).edit().putInt("calibration_schema", CALIBRATION_SCHEMA).apply();
     }
 
     public static void clearCalibration(Context c) {
@@ -146,6 +151,7 @@ public final class Prefs {
             e.remove("roi_r_" + k);
             e.remove("roi_b_" + k);
         }
+        e.remove("calibration_schema");
         e.apply();
     }
 
