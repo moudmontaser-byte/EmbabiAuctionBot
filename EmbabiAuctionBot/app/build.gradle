@@ -10,8 +10,8 @@ android {
         applicationId "com.embabi.auctionbot"
         minSdk 30
         targetSdk 35
-        versionCode 160
-        versionName "16.0-fresh-cal-physical-click"
+        versionCode 161
+        versionName "16.1-video-root-fix"
     }
 
     compileOptions {
