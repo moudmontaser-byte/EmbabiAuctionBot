@@ -6,7 +6,7 @@ import android.graphics.PointF;
 import android.graphics.RectF;
 
 public final class Prefs {
-    private static final int CALIBRATION_SCHEMA = 18;
+    private static final int CALIBRATION_SCHEMA = 19;
     private static final String NAME = "auction_genius";
     private static final int[] DEFAULT_MIN = {84, 85, 85, 85, 86};
 

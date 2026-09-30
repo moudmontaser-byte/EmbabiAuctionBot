@@ -187,8 +187,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void startBot(boolean fresh) {
-        // v16 can run without CAL: it has automatic screen zones and tap fallbacks.
-        // A completed CAL only improves precision and overrides the defaults.
+        // v19 is intentionally calibration-first: no guessed coordinates.
+        // The fixed GUI zones are defined once by the user and become the only source
+        // for turn state, budgets and action buttons.
         AccessibilityServiceInfo info = getServiceInfo();
         if (info == null ||
                 (info.getCapabilities() & AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) == 0) {
@@ -198,6 +199,16 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if (Build.VERSION.SDK_INT >= 30 &&
                 (info.getCapabilities() & AccessibilityServiceInfo.CAPABILITY_CAN_TAKE_SCREENSHOT) == 0) {
             status("صلاحية قراءة الشاشة غير مفعّلة — فعّل Accessibility للخدمة من جديد");
+            return;
+        }
+
+        if (!Prefs.isCalibrated(this)) {
+            running = false;
+            paused = false;
+            Prefs.setBotWanted(this, false);
+            Prefs.setBotPaused(this, false);
+            showFloatingOverlay(true);
+            status("اعمل CAL 8/8 أولاً: OVR + Price + You + Opp + Turn + + / Confirm / Skip");
             return;
         }
 
@@ -1207,18 +1218,16 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private void handleSnapshot(Integer rating, Integer price, Integer mine, Integer opp,
                                 boolean allowAction) {
-        // Rating + current price are mandatory. Budgets can safely fall back
-        // to the last valid reading (or 100/100 at the beginning of a fresh match).
-        if (mine == null || mine < 0 || mine > 100) {
-            mine = (lastMine != null && lastMine >= 0 && lastMine <= 100)
-                    ? lastMine
-                    : 100;
-        }
-
-        if (opp == null || opp < 0 || opp > 100) {
-            opp = (lastOpp != null && lastOpp >= 0 && lastOpp <= 100)
-                    ? lastOpp
-                    : 100;
+        // v19: never invent or reuse a stale budget for an action.
+        // The user calibrates both fixed budget boxes, so a missing/invalid read
+        // means WAIT for the next frame rather than risk a wrong bid.
+        if (mine == null || mine < 0 || mine > 100 ||
+                opp == null || opp < 0 || opp > 100) {
+            stableCandidate = null;
+            stableCandidateCount = 0;
+            status("الميزانية غير مؤكدة: You " + show(mine) +
+                    " | Opp " + show(opp) + " — أنتظر قراءة ثابتة");
+            return;
         }
 
         boolean valid = rating != null && rating >= 80 && rating <= 99 &&
@@ -1253,10 +1262,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
         lastOpp = opp;
         refreshOverlay();
 
-        // On OUR turn, the explicit "تأكيد المزايدة" label already confirms the state,
-        // so one valid numeric read is enough. Requiring two identical OCR frames was
-        // causing the bot to sit still while the live timer kept moving.
-        int requiredReads = allowAction ? 1 : 2;
+        // v19: require two identical fixed-zone reads before any action.
+        // This costs only one extra monitor frame and prevents single-frame OCR mistakes.
+        int requiredReads = 2;
 
         if (stableCandidateCount < requiredReads) {
             status((allowAction ? "دوري" : "مراقبة") +
@@ -1871,7 +1879,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         RectF turnRegion = Prefs.getRegion(this, "turn");
         if (turnRegion == null) {
-            status("منطقة زر المزايدة مش محفوظة — اعمل CAL");
+            status("منطقة زر المزايدة مش محفوظة — اعمل CAL 8/8");
             return;
         }
 
@@ -1881,8 +1889,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
             turnVisualBusy = false;
 
             if (bmp == null) {
-                status("تعذر Screenshot — أستخدم النص كبديل");
-                verifyTurnLabelByOcr();
+                status("تعذر Screenshot لزر المزايدة — أنتظر الفريم التالي");
+                queueScan(350);
                 return;
             }
 
@@ -1895,131 +1903,145 @@ public class AuctionAccessibilityService extends AccessibilityService {
             int b = Math.max(t + 1, Math.min(bmp.getHeight(),
                     Math.round(turnRegion.bottom * bmp.getHeight())));
 
-            int green = 0, amber = 0, neutral = 0, total = 0;
-            int sx = Math.max(2, (r-l)/90);
-            int sy = Math.max(2, (b-t)/26);
+            int total = 0;
+            int green = 0;
+            int brightGreen = 0;
+            int dimGreen = 0;
+            long greenSum = 0L;
 
-            for (int y=t; y<b; y+=sy) {
-                for (int x=l; x<r; x+=sx) {
-                    int c = bmp.getPixel(x,y);
-                    int rr = Color.red(c), gg = Color.green(c), bb = Color.blue(c);
+            int sx = Math.max(2, (r - l) / 90);
+            int sy = Math.max(2, (b - t) / 30);
+
+            for (int y = t; y < b; y += sy) {
+                for (int x = l; x < r; x += sx) {
+                    int c = bmp.getPixel(x, y);
+                    int rr = Color.red(c);
+                    int gg = Color.green(c);
+                    int bb = Color.blue(c);
                     total++;
 
-                    if (gg > 90 && gg > rr * 1.12f && gg > bb * 1.10f) {
-                        green++;
-                    } else if (rr > 145 && gg > 95 && bb < 115) {
-                        amber++;
-                    } else if (Math.max(rr, Math.max(gg,bb)) - Math.min(rr, Math.min(gg,bb)) < 35) {
-                        neutral++;
+                    boolean greenish =
+                            gg > 65 &&
+                            gg > rr * 1.10f &&
+                            gg > bb * 1.08f;
+
+                    if (!greenish) continue;
+
+                    green++;
+                    greenSum += gg;
+
+                    // In the recorded Embabi screen both states are green.
+                    // Confirm is bright/saturated; Waiting is a muted dark green.
+                    if (gg >= 135 && gg - rr >= 45 && gg - bb >= 45) {
+                        brightGreen++;
+                    } else if (gg <= 125) {
+                        dimGreen++;
                     }
                 }
             }
 
             bmp.recycle();
 
-            float activeRatio = total == 0 ? 0f : (green + amber) / (float) total;
-            float neutralRatio = total == 0 ? 0f : neutral / (float) total;
+            float greenRatio = total == 0 ? 0f : green / (float) total;
+            float brightRatio = total == 0 ? 0f : brightGreen / (float) total;
+            float dimRatio = total == 0 ? 0f : dimGreen / (float) total;
+            float avgGreen = green == 0 ? 0f : greenSum / (float) green;
 
-            if (activeRatio >= .035f) {
-                mustSeeWaitingBeforeNextBid = false;
-                status("زر Confirm ملوّن ✓ — دورنا");
+            boolean looksConfirm =
+                    greenRatio >= .12f &&
+                    (brightRatio >= .06f || avgGreen >= 138f);
+
+            boolean looksWaiting =
+                    greenRatio >= .12f &&
+                    (dimRatio >= .06f || avgGreen <= 128f);
+
+            if (looksConfirm && !looksWaiting) {
+                if (mustSeeWaitingBeforeNextBid) {
+                    status("Confirm ما زال ظاهر بعد المزايدة — لن أزايد مرة ثانية، أنتظر Waiting");
+                    queueScan(320);
+                    return;
+                }
+
+                status("زر Confirm أخضر فاتح ✓ — دورنا");
                 readAuctionSnapshot(true);
                 return;
             }
 
-            if (neutralRatio >= .18f) {
+            if (looksWaiting && !looksConfirm) {
+                mustSeeWaitingBeforeNextBid = false;
                 confirmRetryCount = 0;
-                status("زر المزايدة رمادي — دور الخصم");
+                status("زر Waiting أخضر غامق ✓ — دور الخصم");
                 readAuctionSnapshot(false);
                 return;
             }
 
-            // During WebView transitions/loading the button is neither clearly green
-            // nor clearly gray. Do not run another OCR layer and do not guess the turn.
-            // Hidden Player simply waited for the next stable frame; do the same here.
-            status("زر المزايدة في حالة انتقال/تحميل — أنتظر الفريم التالي");
-            queueScan(500);
+            // No guessing. OCR only the exact calibrated bid-state rectangle.
+            status("لون زر المزايدة غير حاسم — أقرأ نفس المربع بالـOCR");
+            verifyTurnLabelByOcr();
         });
     }
 
     private void verifyTurnLabelByOcr() {
         if (turnVisualBusy || screenshotBusy || screenReadBusy) return;
 
-        Rect bounds = Build.VERSION.SDK_INT >= 30
-                ? wm.getMaximumWindowMetrics().getBounds()
-                : new Rect(0, 0,
-                    getResources().getDisplayMetrics().widthPixels,
-                    getResources().getDisplayMetrics().heightPixels);
-
-        PointF raw = Prefs.getTapPointPx(this, "confirm", bounds.width(), bounds.height());
-        PointF norm = Prefs.getPoint(this, "confirm");
-        PointF fallbackConfirm = defaultTapPoint("confirm", bounds);
+        RectF turnRegion = Prefs.getRegion(this, "turn");
+        if (turnRegion == null) {
+            status("منطقة زر المزايدة مش محفوظة — اعمل CAL 8/8");
+            return;
+        }
 
         turnVisualBusy = true;
 
         captureBitmap(bmp -> {
             if (bmp == null) {
                 turnVisualBusy = false;
-                status("تعذر قراءة زر المزايدة — بدون كليك");
-                h.postDelayed(this::scanUnknownScreenByOcr, 150);
+                status("تعذر OCR لزر المزايدة — بدون كليك");
+                queueScan(350);
                 return;
             }
 
-            int cx;
-            int cy;
-
-            if (raw != null) {
-                cx = Math.round(raw.x);
-                cy = Math.round(raw.y);
-            } else if (norm != null) {
-                cx = Math.round(norm.x * bmp.getWidth());
-                cy = Math.round(norm.y * bmp.getHeight());
-            } else {
-                cx = fallbackConfirm == null
-                        ? Math.round(bmp.getWidth() * .292f)
-                        : Math.round(fallbackConfirm.x);
-                cy = fallbackConfirm == null
-                        ? Math.round(bmp.getHeight() * .900f)
-                        : Math.round(fallbackConfirm.y);
-            }
-
-            cx = Math.max(0, Math.min(bmp.getWidth() - 1, cx));
-            cy = Math.max(0, Math.min(bmp.getHeight() - 1, cy));
-
-            int rx = Math.max(110, Math.round(bmp.getWidth() * .24f));
-            int ry = Math.max(42, Math.round(bmp.getHeight() * .050f));
-
-            int l = Math.max(0, cx - rx);
-            int r = Math.min(bmp.getWidth(), cx + rx);
-            int t = Math.max(0, cy - ry);
-            int b = Math.min(bmp.getHeight(), cy + ry);
+            int l = Math.max(0, Math.min(bmp.getWidth() - 1,
+                    Math.round(turnRegion.left * bmp.getWidth())));
+            int r = Math.max(l + 1, Math.min(bmp.getWidth(),
+                    Math.round(turnRegion.right * bmp.getWidth())));
+            int t = Math.max(0, Math.min(bmp.getHeight() - 1,
+                    Math.round(turnRegion.top * bmp.getHeight())));
+            int b = Math.max(t + 1, Math.min(bmp.getHeight(),
+                    Math.round(turnRegion.bottom * bmp.getHeight())));
 
             Bitmap crop;
             try {
-                crop = Bitmap.createBitmap(bmp, l, t, Math.max(1, r-l), Math.max(1, b-t));
+                crop = Bitmap.createBitmap(bmp, l, t,
+                        Math.max(1, r - l), Math.max(1, b - t));
             } catch (Exception e) {
                 bmp.recycle();
                 turnVisualBusy = false;
-                status("تعذر قص منطقة زر المزايدة");
-                h.postDelayed(this::scanUnknownScreenByOcr, 150);
+                status("تعذر قص منطقة زر المزايدة — بدون كليك");
+                queueScan(350);
                 return;
             }
             bmp.recycle();
 
-            Bitmap big = Bitmap.createScaledBitmap(
-                    crop,
-                    Math.max(1, crop.getWidth() * 4),
-                    Math.max(1, crop.getHeight() * 4),
-                    true
-            );
+            Bitmap big;
+            try {
+                big = Bitmap.createScaledBitmap(
+                        crop,
+                        Math.max(1, crop.getWidth() * 5),
+                        Math.max(1, crop.getHeight() * 5),
+                        true
+                );
+            } catch (Exception e) {
+                crop.recycle();
+                turnVisualBusy = false;
+                status("تعذر تكبير منطقة زر المزايدة — بدون كليك");
+                queueScan(350);
+                return;
+            }
             crop.recycle();
 
             recognizer.process(InputImage.fromBitmap(big, 0))
                     .addOnSuccessListener(tx -> {
                         turnVisualBusy = false;
-
-                        // IMPORTANT: tx bounding boxes are LOCAL to this crop.
-                        // Do not compare them to the screen-space overlay rectangle.
                         String label = normalize(tx.getText());
                         big.recycle();
 
@@ -2030,58 +2052,37 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
                         boolean cropWaiting = containsAny(label,
                                 "انتظار المزايدة", "انتظار المزايده",
+                                "بانتظار المزايدة", "بانتظار المزايده",
                                 "waiting bid", "waiting for bid");
 
-                        if (cropConfirm) {
-
-                            if (awaitingConfirm) {
-                                status("OCR زر المزايدة: Confirm ✓ — أضغطه");
-                                clickConfirmAndFinalize();
-                            } else if (mustSeeWaitingBeforeNextBid) {
-                                if (confirmRetryCount < 2) {
-                                    confirmRetryCount++;
-                                    status("Confirm ما زال ظاهر — إعادة الضغط " + confirmRetryCount + "/2");
-                                    clickConfirmSmart(ok -> {
-                                        if (ok) {
-                                            actionCooldownUntil =
-                                                    System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
-                                            queueScan(ACTION_DEBOUNCE_MS + 120);
-                                        } else {
-                                            paused = true;
-                                            Prefs.setBotPaused(this, true);
-                                            status("تعذر ضغط Confirm — PAUSE");
-                                        }
-                                    });
-                                } else {
-                                    paused = true;
-                                    Prefs.setBotPaused(this, true);
-                                    status("Confirm لم يستجب بعد محاولتين — PAUSE");
-                                }
-                            } else {
-                                status("OCR زر المزايدة: «تأكيد المزايدة» ✓ — دورنا");
-                                readAuctionSnapshot(true);
+                        if (cropConfirm && !cropWaiting) {
+                            if (mustSeeWaitingBeforeNextBid) {
+                                status("OCR: Confirm ما زال ظاهر — أنتظر Waiting بدون مزايدة جديدة");
+                                queueScan(320);
+                                return;
                             }
+
+                            status("OCR نفس الزر: «تأكيد المزايدة» ✓ — دورنا");
+                            readAuctionSnapshot(true);
                             return;
                         }
 
-                        if (cropWaiting) {
+                        if (cropWaiting && !cropConfirm) {
                             mustSeeWaitingBeforeNextBid = false;
                             confirmRetryCount = 0;
-                            status("OCR زر المزايدة: «انتظار المزايدة» ✓ — دور الخصم");
+                            status("OCR نفس الزر: «انتظار المزايدة» ✓ — دور الخصم");
                             readAuctionSnapshot(false);
                             return;
                         }
 
-                        // The small button crop did not identify the turn. Now and only
-                        // now fall back to full-screen OCR for navigation/post-match words.
-                        status("زر المزايدة غير واضح — أفحص الشاشة كاملة");
-                        h.postDelayed(this::scanUnknownScreenByOcr, 120);
+                        status("زر المزايدة غير مؤكد — لا ألمس الشاشة");
+                        queueScan(350);
                     })
                     .addOnFailureListener(e -> {
                         turnVisualBusy = false;
                         big.recycle();
-                        status("OCR زر المزايدة فشل — أفحص الشاشة كاملة");
-                        h.postDelayed(this::scanUnknownScreenByOcr, 120);
+                        status("OCR زر المزايدة فشل — لا ألمس الشاشة");
+                        queueScan(350);
                     });
         });
     }
