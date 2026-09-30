@@ -1587,7 +1587,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         floatingView = box;
 
         int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        int compactWidth = Math.max(dp(150), Math.round(screenWidth * .50f));
+        int compactWidth = Math.max(dp(136), Math.round(screenWidth * .40f));
 
         floatingLp = new WindowManager.LayoutParams(
                 compactWidth, -2,
@@ -1927,7 +1927,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 return;
             }
         }
-        dispatchTapNormalized(.5f, .88f, null, null);
+        status("زر «العب» مش ظاهر بوضوح — مش هضغط مكان عشوائي");
     }
 
     private void tapGrayGamesArrow() {
