@@ -569,56 +569,92 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void handlePostMatch(AccessibilityNodeInfo root, String all) {
+        // Highest priority at any post-match stage: if "return home" is visible, use it.
+        AccessibilityNodeInfo home = findVisibleTextAny(root,
+                "العوده للرئيسيه", "العودة للرئيسية",
+                "العوده للصفحه الرئيسيه", "العودة للصفحة الرئيسية",
+                "العوده للقائمه الرئيسيه", "العودة للقائمة الرئيسية",
+                "القائمه الرئيسيه", "القائمة الرئيسية",
+                "return to main", "return home", "main menu");
+
+        if ((postMatchStage == 1 || postMatchStage == 2) && home != null) {
+            status("لقيت «العودة للرئيسية» ✓ — أضغطها");
+            if (clickNode(home)) {
+                onMatchCompleted();
+                postMatchStage = 3;
+                postMatchSwipeAttempts = 0;
+            }
+            return;
+        }
+
         if (postMatchStage == 1) {
-            AccessibilityNodeInfo n = findVisibleTextAny(root,
-                    "عرض التشكيلات", "عرض النتائج", "عرض النتيجه", "عرض النتيجة",
-                    "التشكيلات", "view lineups", "view results");
-            if (n != null) {
-                status("لقيت عرض التشكيلات/النتائج ✓ — أضغطه");
-                if (clickNode(n)) {
+            AccessibilityNodeInfo lineups = findVisibleTextAny(root,
+                    "عرض التشكيلات", "عرض تشكيلات", "التشكيلات",
+                    "عرض النتائج", "عرض النتيجه", "عرض النتيجة",
+                    "view lineups", "view teams", "view results");
+
+            if (lineups != null) {
+                status("لقيت «عرض التشكيلات/النتائج» ✓ — أضغطه");
+                if (clickNode(lineups)) {
                     postMatchStage = 2;
                     postMatchSwipeAttempts = 0;
                 }
                 return;
             }
 
-            postMatchSwipeAttempts++;
-            if (postMatchSwipeAttempts > 30) {
-                paused = true;
-                Prefs.setBotPaused(this, true);
-                status("دورت كتير ومش لاقي عرض التشكيلات — SAFETY PAUSE");
-                return;
-            }
-            status("مش ظاهر لسه — أنزل لتحت وأدور على عرض التشكيلات/النتائج #" + postMatchSwipeAttempts);
-            swipePageDown();
-            return;
-        }
+            // Some versions go directly to simulation/continue without a lineups button.
+            AccessibilityNodeInfo next = findVisibleTextAny(root,
+                    "محاكاه المباراه", "محاكاة المباراة",
+                    "ابدأ المحاكاه", "ابدأ المحاكاة",
+                    "بدء المحاكاه", "بدء المحاكاة",
+                    "لعب المباراه", "لعب المباراة",
+                    "استمرار", "متابعه", "متابعة",
+                    "مشاهده النتيجه", "مشاهدة النتيجة",
+                    "simulate", "continue", "show result");
 
-        if (postMatchStage == 2) {
-            AccessibilityNodeInfo n = findVisibleTextAny(root,
-                    "العوده للرئيسيه", "العودة للرئيسية",
-                    "العوده للقائمه الرئيسيه", "العودة للقائمة الرئيسية",
-                    "القائمه الرئيسيه", "القائمة الرئيسية",
-                    "return to main", "main menu");
-            if (n != null) {
-                status("لقيت العودة للرئيسية ✓ — أضغطها");
-                if (clickNode(n)) {
-                    onMatchCompleted();
-                    postMatchStage = 3;
+            if (next != null) {
+                status("لقيت خطوة المباراة/النتيجة ✓ — أضغطها");
+                if (clickNode(next)) {
+                    postMatchStage = 2;
                     postMatchSwipeAttempts = 0;
                 }
                 return;
             }
 
-            postMatchSwipeAttempts++;
-            if (postMatchSwipeAttempts > 30) {
-                paused = true;
-                Prefs.setBotPaused(this, true);
-                status("دورت كتير ومش لاقي العودة للرئيسية — SAFETY PAUSE");
+            scrollPostMatchFor(
+                    "عرض التشكيلات / النتائج / المحاكاة",
+                    36
+            );
+            return;
+        }
+
+        if (postMatchStage == 2) {
+            // After lineups, keep following only known post-game words.
+            AccessibilityNodeInfo next = findVisibleTextAny(root,
+                    "محاكاه المباراه", "محاكاة المباراة",
+                    "ابدأ المحاكاه", "ابدأ المحاكاة",
+                    "بدء المحاكاه", "بدء المحاكاة",
+                    "ابدأ المباراه", "ابدأ المباراة",
+                    "لعب المباراه", "لعب المباراة",
+                    "استمرار", "متابعه", "متابعة",
+                    "عرض النتيجه", "عرض النتيجة",
+                    "مشاهده النتيجه", "مشاهدة النتيجة",
+                    "simulate match", "simulate", "continue", "show result");
+
+            if (next != null) {
+                status("لقيت زر الخطوة التالية ✓ — أضغطه ثم أعيد قراءة الشاشة");
+                if (clickNode(next)) {
+                    postMatchSwipeAttempts = 0;
+                }
                 return;
             }
-            status("أنزل لتحت وأدور على العودة للرئيسية #" + postMatchSwipeAttempts);
-            swipePageDown();
+
+            // Exact Hidden-Player behaviour: if target words are not visible,
+            // scroll DOWN, reread the screen, and repeat. No blind coordinate click.
+            scrollPostMatchFor(
+                    "العودة للرئيسية / استمرار / عرض النتيجة",
+                    42
+            );
             return;
         }
 
@@ -653,6 +689,21 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
             status("السهم اتضغط — أراقب لحد ما الصفحة الرئيسية تظهر");
         }
+    }
+
+    private void scrollPostMatchFor(String target, int maxAttempts) {
+        postMatchSwipeAttempts++;
+
+        if (postMatchSwipeAttempts > maxAttempts) {
+            paused = true;
+            Prefs.setBotPaused(this, true);
+            status("نزلت وبحثت " + maxAttempts + " مرة ومش لاقي «" + target + "» — SAFETY PAUSE");
+            return;
+        }
+
+        status("الكلمة المطلوبة مش ظاهرة — أنزل لتحت وأدور على «" +
+                target + "» #" + postMatchSwipeAttempts);
+        swipePageDown();
     }
 
     private void finishReturnCycle(AccessibilityNodeInfo root) {
@@ -806,7 +857,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 " • OVR " + rating +
                 " • " + price + "M" +
                 " • You " + mine + "M" +
-                " • Opp " + opp + "M";
+                " • Opp " + opp + "M" +
+                "\nOpp type: " + d.opponentStyle +
+                " " + d.opponentConfidence + "%";
 
         if (d.action == AuctionEngine.Action.BID) {
             status(base + "\nBID +1 • cap " + d.hardCap + "M • " + d.reason);
