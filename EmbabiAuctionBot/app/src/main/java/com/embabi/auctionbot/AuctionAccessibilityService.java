@@ -1105,7 +1105,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
             executeBid(snap);
         } else if (d.action == AuctionEngine.Action.PASS) {
             status(base + " • PASS • " + d.reason + " • سأضغط تخطي اللاعب");
-            lastDecision = "SKIP " + rating + "<" + d.minRating;
+            lastDecision = rating < d.minRating
+                    ? "SKIP " + rating + "<" + d.minRating
+                    : "SKIP";
             refreshOverlay();
             scheduleSkipPlayer();
         } else if (d.action == AuctionEngine.Action.SAFETY_PAUSE) {
