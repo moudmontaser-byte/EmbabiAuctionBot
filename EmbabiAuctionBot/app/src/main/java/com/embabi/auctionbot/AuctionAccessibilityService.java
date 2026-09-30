@@ -1841,24 +1841,10 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void clickPlusSmart(Callback cb) {
-        AccessibilityNodeInfo root = getRootInActiveWindow();
-        AccessibilityNodeInfo n = root == null ? null : findPlusRec(root, 0);
-
-        // WebView ACTION_CLICK can report success without producing a real browser tap.
-        // For auction controls we always send a physical Accessibility gesture.
-        if (n != null && tapNodePhysically(n, cb)) return;
-
         tapSavedPoint("plus", cb);
     }
 
     private void clickConfirmSmart(Callback cb) {
-        AccessibilityNodeInfo root = getRootInActiveWindow();
-        AccessibilityNodeInfo n = findVisibleTextAny(root,
-                "تأكيد المزايدة", "تاكيد المزايده",
-                "confirm bid", "place bid", "confirm");
-
-        if (n != null && tapNodePhysically(n, cb)) return;
-
         tapSavedPoint("confirm", cb);
     }
 
