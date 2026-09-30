@@ -10,8 +10,8 @@ android {
         applicationId "com.embabi.auctionbot"
         minSdk 30
         targetSdk 35
-        versionCode 50
-        versionName "5.0-strict-state-machine"
+        versionCode 60
+        versionName "6.0-webview-physical-tap"
     }
 
     compileOptions {
