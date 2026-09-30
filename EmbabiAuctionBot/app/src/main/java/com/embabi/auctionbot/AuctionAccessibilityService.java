@@ -601,139 +601,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void handlePostMatch(AccessibilityNodeInfo root, String all) {
-        long now = System.currentTimeMillis();
-
-        // 1) Coaches screen -> View Lineups.
-        if (postMatchStage == 1) {
-            AccessibilityNodeInfo lineups = findVisibleTextAny(root,
-                    "عرض التشكيلات", "مشاهدة التشكيلات",
-                    "view lineups", "lineups");
-
-            if (lineups != null) {
-                status("شاشة المدربين ✓ — أضغط «عرض التشكيلات»");
-                if (clickNode(lineups)) {
-                    postMatchStage = 2;
-                    postMatchSwipeAttempts = 0;
-                    postActionNotBefore = now + ACTION_DEBOUNCE_MS;
-                    queueScan(ACTION_DEBOUNCE_MS + 120);
-                }
-                return;
-            }
-
-            // Some builds may skip directly to final lineups.
-            AccessibilityNodeInfo sim = findVisibleTextAny(root,
-                    "بدء المحاكاه", "بدء المحاكاة",
-                    "ابدأ المحاكاه", "ابدأ المحاكاة",
-                    "start simulation", "simulate match");
-
-            if (sim != null) {
-                status("التشكيلات النهائية ظاهرة ✓ — أضغط «بدء المحاكاة»");
-                if (clickNode(sim)) {
-                    postMatchStage = 3;
-                    postActionNotBefore = now + ACTION_DEBOUNCE_MS;
-                    queueScan(ACTION_DEBOUNCE_MS + 120);
-                }
-                return;
-            }
-
-            scanPostMatchByOcr();
-            return;
-        }
-
-        // 2) Final lineups -> Start Simulation.
-        if (postMatchStage == 2) {
-            AccessibilityNodeInfo sim = findVisibleTextAny(root,
-                    "بدء المحاكاه", "بدء المحاكاة",
-                    "ابدأ المحاكاه", "ابدأ المحاكاة",
-                    "start simulation", "simulate match");
-
-            if (sim != null) {
-                status("لقيت «بدء المحاكاة» ✓ — أضغطه ثم أنتظر الشاشة الجديدة");
-                if (clickNode(sim)) {
-                    postMatchStage = 3;
-                    postMatchSwipeAttempts = 0;
-                    postActionNotBefore = now + ACTION_DEBOUNCE_MS;
-                    queueScan(ACTION_DEBOUNCE_MS + 120);
-                }
-                return;
-            }
-
-            scanPostMatchByOcr();
-            return;
-        }
-
-        // 3) Simulation running. Do NOT scroll. Wait for View Results.
-        if (postMatchStage == 3) {
-            AccessibilityNodeInfo results = findVisibleTextAny(root,
-                    "عرض النتائج", "عرض النتيجه", "عرض النتيجة",
-                    "view results", "results");
-
-            if (results != null) {
-                status("المحاكاة انتهت ✓ — أضغط «عرض النتائج»");
-                if (clickNode(results)) {
-                    postMatchStage = 4;
-                    postMatchSwipeAttempts = 0;
-                    postActionNotBefore = now + ACTION_DEBOUNCE_MS;
-                    queueScan(ACTION_DEBOUNCE_MS + 120);
-                }
-                return;
-            }
-
-            status("المحاكاة جارية — أنتظر «عرض النتائج» بدون Scroll");
-            scanPostMatchByOcr();
-            return;
-        }
-
-        // 4) Match summary -> scroll until Return Home appears.
-        if (postMatchStage == 4) {
-            AccessibilityNodeInfo home = findVisibleTextAny(root,
-                    "العوده للرئيسيه", "العودة للرئيسية",
-                    "العوده للصفحه الرئيسيه", "العودة للصفحة الرئيسية",
-                    "العوده للقائمه الرئيسيه", "العودة للقائمة الرئيسية",
-                    "القائمه الرئيسيه", "القائمة الرئيسية",
-                    "return to main", "return home", "main menu");
-
-            if (home != null) {
-                status("لقيت «العودة للرئيسية» ✓ — أضغطها");
-                if (clickNode(home)) {
-                    onMatchCompleted();
-                    postMatchStage = 5;
-                    returnToMainClickedAt = now;
-                    postMatchSwipeAttempts = 0;
-                    postActionNotBefore = now + ACTION_DEBOUNCE_MS;
-                    queueScan(ACTION_DEBOUNCE_MS + 120);
-                }
-                return;
-            }
-
-            scanPostMatchByOcr();
-            return;
-        }
-
-        // 5) After Return Home: either actual Home is ready or Games hub is visible.
-        if (postMatchStage == 5) {
-            if (containsAny(all, "العب الان", "العب الآن", "play now")) {
-                finishReturnCycle(root);
-                return;
-            }
-
-            if (isGamesHub(all)) {
-                status("وصلت صفحة الألعاب ✓ — أضغط السهم الرمادي");
-                tapGrayGamesArrow();
-            } else {
-                scanPostMatchByOcr();
-            }
-            return;
-        }
-
-        // 6) Gray arrow was pressed. Wait until actual Home appears.
-        if (postMatchStage == 6) {
-            if (containsAny(all, "العب الان", "العب الآن", "play now")) {
-                finishReturnCycle(root);
-            } else {
-                scanPostMatchByOcr();
-            }
-        }
+        // The recorded game is a WebView. ACTION_CLICK can report success on a
+        // text node while the game does nothing. Use rendered OCR coordinates only.
+        scanPostMatchByOcr();
     }
 
     private void scanPostMatchByOcr() {
@@ -1052,6 +922,138 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     // ---------- OCR / state reading ----------
 
+    private static class SpatialNumbers {
+        Integer rating;
+        Integer price;
+        Integer mine;
+        Integer opp;
+    }
+
+    private Integer numberFromText(String raw, int min, int max) {
+        if (raw == null) return null;
+        String cleaned = cleanOcrDigits(raw);
+        Matcher m = Pattern.compile("(?<!\\d)(100|[0-9]{1,2})(?!\\d)").matcher(cleaned);
+        while (m.find()) {
+            try {
+                int v = Integer.parseInt(m.group(1));
+                if (v >= min && v <= max) return v;
+            } catch (Exception ignored) {}
+        }
+        return null;
+    }
+
+    private SpatialNumbers extractSpatialAuctionNumbers(Text tx, int w, int h) {
+        SpatialNumbers out = new SpatialNumbers();
+        if (tx == null || w <= 0 || h <= 0) return out;
+
+        float bestRatingScore = Float.MAX_VALUE;
+        float bestPriceScore = Float.MAX_VALUE;
+        float bestMineScore = Float.MAX_VALUE;
+        float bestOppScore = Float.MAX_VALUE;
+
+        for (Text.TextBlock block : tx.getTextBlocks()) {
+            for (Text.Line line : block.getLines()) {
+                Rect lr = line.getBoundingBox();
+                if (lr == null || lr.isEmpty() || ocrRectHitsOverlay(lr)) continue;
+
+                float nx = lr.centerX() / (float) w;
+                float ny = lr.centerY() / (float) h;
+                String txt = line.getText();
+                Integer num = numberFromText(txt, 0, 100);
+
+                if (num != null) {
+                    // Player rating: large card number on the left/upper-middle.
+                    if (num >= 50 && num <= 99 &&
+                            nx >= .08f && nx <= .46f &&
+                            ny >= .26f && ny <= .68f) {
+                        float score = Math.abs(nx - .24f) + Math.abs(ny - .43f);
+                        if (score < bestRatingScore) {
+                            bestRatingScore = score;
+                            out.rating = num;
+                        }
+                    }
+
+                    // Current auction price: bottom-center auction control panel.
+                    if (num >= 0 && num <= 100 &&
+                            nx >= .24f && nx <= .76f &&
+                            ny >= .68f && ny <= .93f) {
+                        float score = Math.abs(nx - .50f) + Math.abs(ny - .79f);
+                        if (score < bestPriceScore) {
+                            bestPriceScore = score;
+                            out.price = num;
+                        }
+                    }
+
+                    // Our / opponent budgets: top scoreboard.
+                    if (num >= 0 && num <= 100 &&
+                            ny >= .10f && ny <= .30f) {
+                        if (nx < .50f) {
+                            float score = Math.abs(nx - .27f) + Math.abs(ny - .19f);
+                            if (score < bestMineScore) {
+                                bestMineScore = score;
+                                out.mine = num;
+                            }
+                        } else {
+                            float score = Math.abs(nx - .73f) + Math.abs(ny - .19f);
+                            if (score < bestOppScore) {
+                                bestOppScore = score;
+                                out.opp = num;
+                            }
+                        }
+                    }
+                }
+
+                // Element-level pass catches split OCR like "€" + "8M".
+                for (Text.Element el : line.getElements()) {
+                    Rect er = el.getBoundingBox();
+                    if (er == null || er.isEmpty() || ocrRectHitsOverlay(er)) continue;
+
+                    float ex = er.centerX() / (float) w;
+                    float ey = er.centerY() / (float) h;
+                    Integer ev = numberFromText(el.getText(), 0, 100);
+                    if (ev == null) continue;
+
+                    if (ev >= 50 && ev <= 99 &&
+                            ex >= .08f && ex <= .46f &&
+                            ey >= .26f && ey <= .68f) {
+                        float score = Math.abs(ex - .24f) + Math.abs(ey - .43f);
+                        if (score < bestRatingScore) {
+                            bestRatingScore = score;
+                            out.rating = ev;
+                        }
+                    }
+
+                    if (ex >= .24f && ex <= .76f &&
+                            ey >= .68f && ey <= .93f) {
+                        float score = Math.abs(ex - .50f) + Math.abs(ey - .79f);
+                        if (score < bestPriceScore) {
+                            bestPriceScore = score;
+                            out.price = ev;
+                        }
+                    }
+
+                    if (ey >= .10f && ey <= .30f) {
+                        if (ex < .50f) {
+                            float score = Math.abs(ex - .27f) + Math.abs(ey - .19f);
+                            if (score < bestMineScore) {
+                                bestMineScore = score;
+                                out.mine = ev;
+                            }
+                        } else {
+                            float score = Math.abs(ex - .73f) + Math.abs(ey - .19f);
+                            if (score < bestOppScore) {
+                                bestOppScore = score;
+                                out.opp = ev;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return out;
+    }
+
     private void readAuctionSnapshot(boolean allowAction) {
         if (screenReadBusy || bidFlowInProgress) return;
 
@@ -1072,261 +1074,90 @@ public class AuctionAccessibilityService extends AccessibilityService {
             if (bmp == null) {
                 screenReadBusy = false;
 
-                // If the WebView itself exposed all labelled numbers, do not block on screenshot.
-                if (hints.rating != null && hints.price != null &&
-                        hints.mine != null && hints.opp != null) {
-                    handleSnapshot(hints.rating, hints.price, hints.mine, hints.opp, allowAction);
+                Integer rating = hints.rating;
+                Integer price = hints.price;
+                Integer mine = hints.mine;
+                Integer opp = hints.opp;
+
+                if (rating != null && price != null) {
+                    handleSnapshot(rating, price, mine, opp, allowAction);
                 } else {
                     stableCandidate = null;
                     stableCandidateCount = 0;
-                    status("تعذر Screenshot والـWebView لم يعط كل الأرقام — بدون كليك");
+                    status("تعذر Screenshot ولم أجد Rating/Price موثوقين — بدون كليك");
                 }
                 return;
             }
 
-            final Integer[] vals = new Integer[4];
-            final int[] done = {0};
+            recognizer.process(InputImage.fromBitmap(bmp, 0))
+                    .addOnSuccessListener(fullTx -> {
+                        SpatialNumbers spatial =
+                                extractSpatialAuctionNumbers(fullTx, bmp.getWidth(), bmp.getHeight());
 
-            IntResult[] sinks = new IntResult[4];
-            for (int i = 0; i < 4; i++) {
-                final int index = i;
-                sinks[i] = value -> {
-                    vals[index] = value;
-                    done[0]++;
+                        // Spatial full-screen OCR is primary. It avoids a bad manual box
+                        // silently pointing at the wrong number.
+                        Integer spatialRating = spatial.rating;
+                        Integer spatialPrice = spatial.price;
+                        Integer spatialMine = spatial.mine;
+                        Integer spatialOpp = spatial.opp;
 
-                    if (done[0] == 4) {
+                        final Integer[] vals = new Integer[4];
+                        final int[] done = {0};
+
+                        IntResult[] sinks = new IntResult[4];
+                        for (int i = 0; i < 4; i++) {
+                            final int index = i;
+                            sinks[i] = value -> {
+                                vals[index] = value;
+                                done[0]++;
+
+                                if (done[0] == 4) {
+                                    bmp.recycle();
+                                    screenReadBusy = false;
+
+                                    Integer rating = spatialRating != null
+                                            ? spatialRating
+                                            : (vals[0] != null ? vals[0] : hints.rating);
+
+                                    Integer price = spatialPrice != null && spatialPrice > 0
+                                            ? spatialPrice
+                                            : (hints.price != null && hints.price > 0
+                                                ? hints.price : vals[1]);
+
+                                    Integer mine = spatialMine != null && spatialMine > 0
+                                            ? spatialMine
+                                            : (hints.mine != null && hints.mine > 0
+                                                ? hints.mine : vals[2]);
+
+                                    Integer opp = spatialOpp != null && spatialOpp > 0
+                                            ? spatialOpp
+                                            : (hints.opp != null && hints.opp > 0
+                                                ? hints.opp : vals[3]);
+
+                                    status("AUTO OCR: OVR " + show(rating) +
+                                            " | Price " + show(price) +
+                                            " | You " + show(mine) +
+                                            " | Opp " + show(opp));
+
+                                    handleSnapshot(rating, price, mine, opp, allowAction);
+                                }
+                            };
+                        }
+
+                        // Manual boxes are now fallback only.
+                        ocrRect(bmp, Prefs.getRegion(this, "rating"), true, sinks[0]);
+                        ocrRect(bmp, Prefs.getRegion(this, "price"), false, sinks[1]);
+                        ocrRect(bmp, Prefs.getRegion(this, "mine"), false, sinks[2]);
+                        ocrRect(bmp, Prefs.getRegion(this, "opponent"), false, sinks[3]);
+                    })
+                    .addOnFailureListener(e -> {
                         bmp.recycle();
                         screenReadBusy = false;
-
-                        // Rating: OCR box first. Labelled WebView value is backup.
-                        Integer rating = vals[0] != null ? vals[0] : hints.rating;
-
-                        // Price/budgets: labelled WebView values are usually cleaner than OCR.
-                        Integer price = hints.price != null ? hints.price : vals[1];
-                        Integer mine = hints.mine != null ? hints.mine : vals[2];
-                        Integer opp = hints.opp != null ? hints.opp : vals[3];
-
-                        handleSnapshot(rating, price, mine, opp, allowAction);
-                    }
-                };
-            }
-
-            ocrRect(bmp, Prefs.getRegion(this, "rating"), true, sinks[0]);
-            ocrRect(bmp, Prefs.getRegion(this, "price"), false, sinks[1]);
-            ocrRect(bmp, Prefs.getRegion(this, "mine"), false, sinks[2]);
-            ocrRect(bmp, Prefs.getRegion(this, "opponent"), false, sinks[3]);
+                        status("Full-screen OCR فشل — بدون كليك");
+                    });
         });
     }
 
-    private void ocrRect(Bitmap base, RectF n, boolean ratingMode, IntResult cb) {
-        if (base == null || n == null) {
-            cb.accept(null);
-            return;
-        }
-
-        // A tiny padding protects against a calibration box cutting off one digit.
-        float px = n.width() * .04f;
-        float py = n.height() * .08f;
-        float nl = Math.max(0f, n.left - px);
-        float nt = Math.max(0f, n.top - py);
-        float nr = Math.min(1f, n.right + px);
-        float nb = Math.min(1f, n.bottom + py);
-
-        int l = Math.max(0, Math.min(base.getWidth() - 1, Math.round(nl * base.getWidth())));
-        int t = Math.max(0, Math.min(base.getHeight() - 1, Math.round(nt * base.getHeight())));
-        int r = Math.max(l + 1, Math.min(base.getWidth(), Math.round(nr * base.getWidth())));
-        int b = Math.max(t + 1, Math.min(base.getHeight(), Math.round(nb * base.getHeight())));
-
-        Bitmap crop;
-        try {
-            crop = Bitmap.createBitmap(base, l, t, r - l, b - t);
-        } catch (Exception e) {
-            cb.accept(null);
-            return;
-        }
-
-        int scale = ratingMode ? 4 : 3;
-        Bitmap enlarged;
-        try {
-            enlarged = Bitmap.createScaledBitmap(
-                    crop,
-                    Math.max(1, crop.getWidth() * scale),
-                    Math.max(1, crop.getHeight() * scale),
-                    true
-            );
-        } catch (Exception e) {
-            crop.recycle();
-            cb.accept(null);
-            return;
-        }
-        crop.recycle();
-
-        recognizePrepared(enlarged, ratingMode, cb, true);
-    }
-
-    private void recognizePrepared(Bitmap image, boolean ratingMode, IntResult cb,
-                                   boolean allowContrastFallback) {
-        recognizer.process(InputImage.fromBitmap(image, 0))
-                .addOnSuccessListener(tx -> {
-                    Integer first = ratingMode
-                            ? extractRating(tx.getText())
-                            : extractMoney(tx.getText());
-
-                    boolean firstStrong = ratingMode
-                            ? first != null
-                            : first != null && first > 0;
-
-                    if (firstStrong || !allowContrastFallback) {
-                        image.recycle();
-                        cb.accept(first);
-                        return;
-                    }
-
-                    // Money OCR in this game repeatedly confused 8 with O/0.
-                    // A returned zero is therefore treated as WEAK, not as a valid answer.
-                    Bitmap high = makeHighContrast(image);
-                    Bitmap inverse = makeHighContrastInverse(image);
-                    image.recycle();
-
-                    if (high == null && inverse == null) {
-                        cb.accept(first);
-                        return;
-                    }
-
-                    if (high == null) {
-                        recognizePrepared(inverse, ratingMode, cb, false);
-                        return;
-                    }
-
-                    recognizer.process(InputImage.fromBitmap(high, 0))
-                            .addOnSuccessListener(tx2 -> {
-                                Integer second = ratingMode
-                                        ? extractRating(tx2.getText())
-                                        : extractMoney(tx2.getText());
-                                high.recycle();
-
-                                boolean secondStrong = ratingMode
-                                        ? second != null
-                                        : second != null && second > 0;
-
-                                if (secondStrong) {
-                                    if (inverse != null) inverse.recycle();
-                                    cb.accept(second);
-                                    return;
-                                }
-
-                                if (inverse == null) {
-                                    cb.accept(second != null ? second : first);
-                                    return;
-                                }
-
-                                recognizer.process(InputImage.fromBitmap(inverse, 0))
-                                        .addOnSuccessListener(tx3 -> {
-                                            Integer third = ratingMode
-                                                    ? extractRating(tx3.getText())
-                                                    : extractMoney(tx3.getText());
-                                            inverse.recycle();
-
-                                            boolean thirdStrong = ratingMode
-                                                    ? third != null
-                                                    : third != null && third > 0;
-
-                                            if (thirdStrong) cb.accept(third);
-                                            else if (second != null) cb.accept(second);
-                                            else cb.accept(first);
-                                        })
-                                        .addOnFailureListener(e3 -> {
-                                            inverse.recycle();
-                                            cb.accept(second != null ? second : first);
-                                        });
-                            })
-                            .addOnFailureListener(e2 -> {
-                                high.recycle();
-
-                                if (inverse == null) {
-                                    cb.accept(first);
-                                    return;
-                                }
-
-                                recognizer.process(InputImage.fromBitmap(inverse, 0))
-                                        .addOnSuccessListener(tx3 -> {
-                                            Integer third = ratingMode
-                                                    ? extractRating(tx3.getText())
-                                                    : extractMoney(tx3.getText());
-                                            inverse.recycle();
-                                            cb.accept(third != null ? third : first);
-                                        })
-                                        .addOnFailureListener(e3 -> {
-                                            inverse.recycle();
-                                            cb.accept(first);
-                                        });
-                            });
-                })
-                .addOnFailureListener(e -> {
-                    image.recycle();
-                    cb.accept(null);
-                });
-    }
-
-    private Bitmap makeHighContrastInverse(Bitmap src) {
-        try {
-            int w = src.getWidth();
-            int hgt = src.getHeight();
-            int[] pixels = new int[w * hgt];
-            src.getPixels(pixels, 0, w, 0, 0, w, hgt);
-
-            long sum = 0;
-            for (int c : pixels) {
-                int y = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000;
-                sum += y;
-            }
-
-            int avg = pixels.length == 0 ? 140 : (int) (sum / pixels.length);
-            int threshold = Math.max(95, Math.min(185, avg + 8));
-
-            for (int i = 0; i < pixels.length; i++) {
-                int c = pixels[i];
-                int y = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000;
-                pixels[i] = y >= threshold ? Color.BLACK : Color.WHITE;
-            }
-
-            Bitmap out = Bitmap.createBitmap(w, hgt, Bitmap.Config.ARGB_8888);
-            out.setPixels(pixels, 0, w, 0, 0, w, hgt);
-            return out;
-        } catch (Exception ignored) {
-            return null;
-        }
-    }
-
-    private Bitmap makeHighContrast(Bitmap src) {
-        try {
-            int w = src.getWidth();
-            int hgt = src.getHeight();
-            int[] pixels = new int[w * hgt];
-            src.getPixels(pixels, 0, w, 0, 0, w, hgt);
-
-            long sum = 0;
-            for (int c : pixels) {
-                int y = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000;
-                sum += y;
-            }
-
-            int avg = pixels.length == 0 ? 140 : (int) (sum / pixels.length);
-            int threshold = Math.max(105, Math.min(190, avg + 18));
-
-            for (int i = 0; i < pixels.length; i++) {
-                int c = pixels[i];
-                int y = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000;
-                pixels[i] = y >= threshold ? Color.WHITE : Color.BLACK;
-            }
-
-            Bitmap out = Bitmap.createBitmap(w, hgt, Bitmap.Config.ARGB_8888);
-            out.setPixels(pixels, 0, w, 0, 0, w, hgt);
-            return out;
-        } catch (Exception ignored) {
-            return null;
-        }
-    }
 
     private void handleSnapshot(Integer rating, Integer price, Integer mine, Integer opp,
                                 boolean allowAction) {
