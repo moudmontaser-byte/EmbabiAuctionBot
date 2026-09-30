@@ -329,16 +329,16 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 "العودة للرئيسية", "العوده للرئيسيه",
                 "العودة للصفحة الرئيسية", "العوده للصفحه الرئيسيه",
                 "return home", "return to main")) {
-            status("لقيت «العودة للرئيسية» ✓ — أضغطها مباشرة");
-            if (clickTextAny(root,
+            status("لقيت «العودة للرئيسية» ✓ — أحدد مكانها من الصورة وأضغطها");
+            clickRenderedTextOnce(
+                    () -> {
+                        onMatchCompleted();
+                        postMatchStage = 5;
+                        returnToMainClickedAt = System.currentTimeMillis();
+                    },
                     "العودة للرئيسية", "العوده للرئيسيه",
                     "العودة للصفحة الرئيسية", "العوده للصفحه الرئيسيه",
-                    "return home", "return to main")) {
-                onMatchCompleted();
-                postMatchStage = 5;
-                returnToMainClickedAt = now;
-                actionCooldownUntil = now + ACTION_DEBOUNCE_MS;
-            }
+                    "return home", "return to main");
             return;
         }
 
@@ -357,7 +357,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 status("أنتظر ثانية لانتقال الشاشة…");
                 return;
             }
-            handlePostMatch(root, all);
+            scanPostMatchByOcr();
             return;
         }
 
@@ -631,6 +631,44 @@ public class AuctionAccessibilityService extends AccessibilityService {
         // The recorded game is a WebView. ACTION_CLICK can report success on a
         // text node while the game does nothing. Use rendered OCR coordinates only.
         scanPostMatchByOcr();
+    }
+
+    private void clickRenderedTextOnce(Runnable onSuccess, String... targets) {
+        if (screenshotBusy || screenReadBusy) return;
+
+        captureBitmap(bmp -> {
+            if (bmp == null) {
+                status("تعذر Screenshot — بدون كليك");
+                return;
+            }
+
+            recognizer.process(InputImage.fromBitmap(bmp, 0))
+                    .addOnSuccessListener(tx -> {
+                        Rect hit = findOcrTextRect(tx, targets);
+                        bmp.recycle();
+
+                        if (hit == null) {
+                            status("النص ظاهر لكن OCR لم يحدد مكانه — سأعيد المحاولة");
+                            queueScan(ACTION_DEBOUNCE_MS);
+                            return;
+                        }
+
+                        dispatchTapPx(hit.centerX(), hit.centerY(),
+                                () -> {
+                                    if (onSuccess != null) onSuccess.run();
+                                    queueScan(ACTION_DEBOUNCE_MS + 120);
+                                },
+                                () -> {
+                                    status("Gesture اتلغى — سأعيد المحاولة");
+                                    queueScan(ACTION_DEBOUNCE_MS);
+                                });
+                    })
+                    .addOnFailureListener(e -> {
+                        bmp.recycle();
+                        status("OCR فشل — سأعيد المحاولة");
+                        queueScan(ACTION_DEBOUNCE_MS);
+                    });
+        });
     }
 
     private void scanPostMatchByOcr() {
