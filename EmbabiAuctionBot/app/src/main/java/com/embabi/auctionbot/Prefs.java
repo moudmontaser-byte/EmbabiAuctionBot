@@ -35,6 +35,40 @@ public final class Prefs {
                 .apply();
     }
 
+    public static void saveTapPointPx(Context c, String key,
+                                      float rawX, float rawY,
+                                      int screenW, int screenH) {
+        sp(c).edit()
+                .putFloat("px_x_" + key, rawX)
+                .putFloat("px_y_" + key, rawY)
+                .putInt("px_w_" + key, Math.max(1, screenW))
+                .putInt("px_h_" + key, Math.max(1, screenH))
+                .apply();
+    }
+
+    public static PointF getTapPointPx(Context c, String key, int currentW, int currentH) {
+        SharedPreferences p = sp(c);
+        if (!p.contains("px_x_" + key) || !p.contains("px_y_" + key)) return null;
+
+        float x = p.getFloat("px_x_" + key, -1f);
+        float y = p.getFloat("px_y_" + key, -1f);
+        int savedW = Math.max(1, p.getInt("px_w_" + key, currentW));
+        int savedH = Math.max(1, p.getInt("px_h_" + key, currentH));
+
+        if (x < 0 || y < 0) return null;
+
+        // Same phone/orientation: this is exactly the pixel the user touched.
+        if (savedW == currentW && savedH == currentH) {
+            return new PointF(x, y);
+        }
+
+        // Fallback for a small display-size change.
+        return new PointF(
+                x * currentW / (float) savedW,
+                y * currentH / (float) savedH
+        );
+    }
+
     public static PointF getPoint(Context c, String key) {
         SharedPreferences p = sp(c);
         String xk = "x_" + key;
@@ -91,6 +125,10 @@ public final class Prefs {
         for (String k : points) {
             e.remove("x_" + k);
             e.remove("y_" + k);
+            e.remove("px_x_" + k);
+            e.remove("px_y_" + k);
+            e.remove("px_w_" + k);
+            e.remove("px_h_" + k);
         }
         for (String k : ROI_KEYS) {
             e.remove("roi_set_" + k);
