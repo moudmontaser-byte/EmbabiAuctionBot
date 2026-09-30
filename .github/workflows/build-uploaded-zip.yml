@@ -6,7 +6,6 @@ on:
     branches: [ main ]
     paths:
       - 'EmbabiAuctionGenius_UPLOAD_TO_BUILD.zip'
-      - '.github/workflows/build-uploaded-zip.yml'
 
 jobs:
   build:
