@@ -86,6 +86,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private WindowManager wm;
     private View floatingView;
     private WindowManager.LayoutParams floatingLp;
+    private int overlaySavedX = Integer.MIN_VALUE;
+    private int overlaySavedY = Integer.MIN_VALUE;
     private boolean overlayExpanded = true;
     private TextView ovStatus, ovRunState, ovRound, ovRating, ovPrice, ovBudgets, ovDecision, ovRepeat;
     private final TextView[] ovPlayerMins = new TextView[5];
@@ -1783,6 +1785,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         Prefs.savePoint(this, key,
                 (x - bounds.left) / Math.max(1f, bounds.width()),
                 (y - bounds.top) / Math.max(1f, bounds.height()));
+        Prefs.saveTapPointPx(this, key, x, y, bounds.width(), bounds.height());
         calibrationStep++;
 
         if (calibrationStep > 5) {
@@ -2104,8 +2107,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 PixelFormat.TRANSLUCENT);
 
         floatingLp.gravity = Gravity.TOP | Gravity.START;
-        floatingLp.x = dp(6);
-        floatingLp.y = dp(62);
+        floatingLp.x = overlaySavedX == Integer.MIN_VALUE ? dp(6) : overlaySavedX;
+        floatingLp.y = overlaySavedY == Integer.MIN_VALUE ? dp(62) : overlaySavedY;
 
         final float[] touch = new float[4];
 
@@ -2123,6 +2126,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
             if (e.getAction() == MotionEvent.ACTION_MOVE) {
                 floatingLp.x = Math.round(touch[2] + e.getRawX() - touch[0]);
                 floatingLp.y = Math.round(touch[3] + e.getRawY() - touch[1]);
+                overlaySavedX = floatingLp.x;
+                overlaySavedY = floatingLp.y;
 
                 try {
                     wm.updateViewLayout(floatingView, floatingLp);
@@ -2307,16 +2312,27 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void tapSavedPoint(String key, Callback cb) {
-        PointF p = Prefs.getPoint(this, key);
-        if (p == null) {
-            cb.onDone(false);
-            return;
-        }
         Rect bounds = Build.VERSION.SDK_INT >= 30
                 ? wm.getMaximumWindowMetrics().getBounds()
                 : new Rect(0, 0,
                     getResources().getDisplayMetrics().widthPixels,
                     getResources().getDisplayMetrics().heightPixels);
+
+        PointF px = Prefs.getTapPointPx(this, key, bounds.width(), bounds.height());
+
+        if (px != null) {
+            dispatchTapPx(px.x, px.y,
+                    () -> cb.onDone(true),
+                    () -> cb.onDone(false));
+            return;
+        }
+
+        PointF p = Prefs.getPoint(this, key);
+        if (p == null) {
+            cb.onDone(false);
+            return;
+        }
+
         dispatchTapPx(
                 bounds.left + p.x * bounds.width(),
                 bounds.top + p.y * bounds.height(),
