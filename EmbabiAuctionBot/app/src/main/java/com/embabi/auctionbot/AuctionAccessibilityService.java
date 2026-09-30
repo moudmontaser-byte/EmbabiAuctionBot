@@ -1385,10 +1385,15 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private void onCalibrationPoint(float x, float y) {
         if (calibrationStep < 4 || calibrationStep > 5) return;
-        int w = getResources().getDisplayMetrics().widthPixels;
-        int hh = getResources().getDisplayMetrics().heightPixels;
+        Rect bounds = Build.VERSION.SDK_INT >= 30
+                ? wm.getMaximumWindowMetrics().getBounds()
+                : new Rect(0, 0,
+                    getResources().getDisplayMetrics().widthPixels,
+                    getResources().getDisplayMetrics().heightPixels);
         String key = calibrationStep == 4 ? "plus" : "confirm";
-        Prefs.savePoint(this, key, x / Math.max(1f, w), y / Math.max(1f, hh));
+        Prefs.savePoint(this, key,
+                (x - bounds.left) / Math.max(1f, bounds.width()),
+                (y - bounds.top) / Math.max(1f, bounds.height()));
         calibrationStep++;
 
         if (calibrationStep > 5) {
@@ -1897,13 +1902,15 @@ public class AuctionAccessibilityService extends AccessibilityService {
             cb.onDone(false);
             return;
         }
-        int w = getResources().getDisplayMetrics().widthPixels;
-        int hh = getResources().getDisplayMetrics().heightPixels;
-        dispatchTapPx(p.x * w, p.y * hh,
-                () -> {
-                    actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
-                    cb.onDone(true);
-                },
+        Rect bounds = Build.VERSION.SDK_INT >= 30
+                ? wm.getMaximumWindowMetrics().getBounds()
+                : new Rect(0, 0,
+                    getResources().getDisplayMetrics().widthPixels,
+                    getResources().getDisplayMetrics().heightPixels);
+        dispatchTapPx(
+                bounds.left + p.x * bounds.width(),
+                bounds.top + p.y * bounds.height(),
+                () -> cb.onDone(true),
                 () -> cb.onDone(false));
     }
 
