@@ -1262,28 +1262,67 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if (System.currentTimeMillis() < actionCooldownUntil) return;
 
         bidFlowInProgress = true;
+        awaitingConfirm = false;
         engine.markOwnBidStarted(snap.price);
+
         lastDecision = "BID→+";
         refreshOverlay();
-        status("BID ✓ — سأضغط + على النقطة المعايرة");
+        status("BID ✓ — أضغط + الآن");
 
         clickPlusSmart(ok -> {
-            bidFlowInProgress = false;
-
             if (!ok) {
+                bidFlowInProgress = false;
                 engine.cancelPending();
                 paused = true;
                 Prefs.setBotPaused(this, true);
-                status("زر + لم يتأكد — SAFETY PAUSE");
+                lastDecision = "+✕";
+                refreshOverlay();
+                status("فشل ضغط + — SAFETY PAUSE");
                 return;
             }
 
-            awaitingConfirm = true;
-            lastDecision = "+✓ CFM?";
+            lastDecision = "+✓ → CFM";
             refreshOverlay();
-            actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
-            status("+ اتضغط ✓ — أنتظر ثانية ثم أتحقق من «تأكيد المزايدة»");
-            queueScan(ACTION_DEBOUNCE_MS + 120);
+            status("+ اتضغط ✓ — أنتظر ثانية ثم أضغط «تأكيد المزايدة» مباشرة");
+
+            // No extra OCR/state gate between + and Confirm.
+            // In this GUI + only changes the intended bid; Confirm submits it.
+            h.postDelayed(() -> {
+                if (!running || paused) {
+                    bidFlowInProgress = false;
+                    engine.cancelPending();
+                    return;
+                }
+
+                awaitingConfirm = true;
+                lastDecision = "CFM→";
+                refreshOverlay();
+                status("الثانية عدّت ✓ — أضغط «تأكيد المزايدة» الآن");
+
+                clickConfirmSmart(confirmOk -> {
+                    awaitingConfirm = false;
+                    bidFlowInProgress = false;
+
+                    if (!confirmOk) {
+                        engine.cancelPending();
+                        paused = true;
+                        Prefs.setBotPaused(this, true);
+                        lastDecision = "CFM✕";
+                        refreshOverlay();
+                        status("فشل ضغط «تأكيد المزايدة» — SAFETY PAUSE");
+                        return;
+                    }
+
+                    engine.markConfirmDispatched();
+                    mustSeeWaitingBeforeNextBid = true;
+                    lastDecision = "CFM✓";
+                    refreshOverlay();
+                    status("تمت المزايدة ✓ — أنتظر ثانية ثم أقرأ الشاشة الجديدة");
+
+                    actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
+                    queueScan(ACTION_DEBOUNCE_MS + 120);
+                });
+            }, 1150L);
         });
     }
 
