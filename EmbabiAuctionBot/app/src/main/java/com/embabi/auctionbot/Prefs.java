@@ -6,11 +6,11 @@ import android.graphics.PointF;
 import android.graphics.RectF;
 
 public final class Prefs {
-    private static final int CALIBRATION_SCHEMA = 16;
+    private static final int CALIBRATION_SCHEMA = 18;
     private static final String NAME = "auction_genius";
     private static final int[] DEFAULT_MIN = {84, 85, 85, 85, 86};
 
-    private static final String[] ROI_KEYS = {"rating", "price", "mine", "opponent"};
+    private static final String[] ROI_KEYS = {"rating", "price", "mine", "opponent", "turn"};
 
     private Prefs() {}
 
@@ -111,37 +111,20 @@ public final class Prefs {
     public static boolean hasRegion(Context c, String key) {
         return getRegion(c, key) != null;
     }
-    public static RectF getRegionOrDefault(Context c, String key) {
-        RectF saved = getRegion(c, key);
-        if (saved != null) return saved;
-
-        // Tight defaults measured from the user's current 9:16 auction layout.
-        // Hidden Player succeeded because it OCR'd small regions, not huge screen zones.
-        if ("rating".equals(key)) {
-            return new RectF(.205f, .345f, .355f, .500f);
-        }
-        if ("price".equals(key)) {
-            return new RectF(.405f, .775f, .595f, .842f);
-        }
-        if ("mine".equals(key)) {
-            return new RectF(.255f, .155f, .430f, .220f);
-        }
-        if ("opponent".equals(key)) {
-            return new RectF(.570f, .155f, .745f, .220f);
-        }
-        return null;
-    }
-
-
     public static boolean isCalibrated(Context c) {
         SharedPreferences p = sp(c);
 
-        // v16+: numeric fields are read automatically from their screen zones.
-        // Calibration is only for the two physical auction controls.
-        boolean rawPlus = p.contains("px_x_plus") && p.contains("px_y_plus");
-        boolean rawConfirm = p.contains("px_x_confirm") && p.contains("px_y_confirm");
+        for (String key : ROI_KEYS) {
+            RectF r = getRegion(c, key);
+            if (r == null || r.width() < .012f || r.height() < .010f) return false;
+        }
 
-        return rawPlus && rawConfirm;
+        String[] taps = {"plus", "confirm", "skip"};
+        for (String key : taps) {
+            if (!p.contains("px_x_" + key) || !p.contains("px_y_" + key)) return false;
+        }
+
+        return p.getInt("calibration_schema", 0) == CALIBRATION_SCHEMA;
     }
 
     public static void markCalibrationComplete(Context c) {
@@ -150,7 +133,7 @@ public final class Prefs {
 
     public static void clearCalibration(Context c) {
         SharedPreferences.Editor e = sp(c).edit();
-        String[] points = {"plus", "confirm", "rating", "price", "mine", "opponent"};
+        String[] points = {"plus", "confirm", "skip", "rating", "price", "mine", "opponent", "turn"};
         for (String k : points) {
             e.remove("x_" + k);
             e.remove("y_" + k);
