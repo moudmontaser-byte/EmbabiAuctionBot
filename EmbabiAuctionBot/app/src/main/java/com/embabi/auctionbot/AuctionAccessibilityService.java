@@ -51,9 +51,12 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private int[] confirmBaseline = null;
 
     private long actionCooldownUntil = 0L;
+    private long postActionNotBefore = 0L;
+    private long returnToMainClickedAt = 0L;
     private long startedAt = 0L;
     private int matchesCompleted = 0;
     private boolean stopAfterReturn = false;
+    private boolean mustSeeWaitingBeforeNextBid = false;
 
     private AuctionEngine.Snapshot stableCandidate = null;
     private int stableCandidateCount = 0;
@@ -243,6 +246,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
         postMatchSwipeAttempts = 0;
         grayArrowAttempts = 0;
         stopAfterReturn = false;
+        postActionNotBefore = 0L;
+        returnToMainClickedAt = 0L;
+        mustSeeWaitingBeforeNextBid = false;
         stableCandidate = null;
         stableCandidateCount = 0;
         cancelBidFlow();
@@ -290,109 +296,103 @@ public class AuctionAccessibilityService extends AccessibilityService {
             Prefs.setCurrentRound(this, guiRound);
             stableCandidate = null;
             stableCandidateCount = 0;
-            status("قرأت الجولة من الشاشة مباشرة: " + guiRound + "/5 ✓");
         }
 
-        // ---------- End-of-game navigation: identical safety philosophy to Hidden Player ----------
+        // Same successful rule used by Hidden Player:
+        // after EVERY physical action, give the WebView a full second to render.
+        if (now < actionCooldownUntil) {
+            status("أنتظر ثانية لظهور الشاشة الجديدة…");
+            return;
+        }
+
+        // ---------- Strict post-match loop ----------
         if (postMatchStage == 0 && isPostMatchScreen(all)) {
             postMatchStage = 1;
             postMatchSwipeAttempts = 0;
             resultWaiting = false;
             cancelBidFlow();
-            status("انتهت الجيم ✓ — سأدور على عرض التشكيلات/النتائج وأنزل لو مش ظاهر");
+            mustSeeWaitingBeforeNextBid = false;
+            status("انتهت الجيم ✓ — أنزل لحد «عرض التشكيلات/النتائج»");
         }
 
         if (postMatchStage > 0) {
+            if (now < postActionNotBefore) {
+                status("أنتظر ثانية لانتقال الشاشة…");
+                return;
+            }
             handlePostMatch(root, all);
             return;
         }
 
-        // ---------- Per-player auction result ----------
+        // ---------- Auction result between the 5 players ----------
         if (isAuctionResultScreen(all)) {
-            if (!resultWaiting) {
-                resultWaiting = true;
-                stableCandidate = null;
-                stableCandidateCount = 0;
-                if (awaitingConfirm || bidFlowInProgress) {
-                    cancelBidFlow();
-                    paused = true;
-                    Prefs.setBotPaused(this, true);
-                    status("ظهرت نتيجة المزاد أثناء خطوة غير مؤكدة — SAFETY PAUSE");
-                    return;
-                }
-            }
-            int round = engine == null ? Prefs.currentRound(this) : engine.getRound();
-            status(round >= 5
-                    ? "نتيجة المزاد الخامس ظاهرة — لا ألمس شيء، أراقب شاشة نهاية الجيم"
-                    : "نتيجة المزاد ظاهرة — أراقب الشاشة حتى يظهر اللاعب التالي فعليًا");
+            resultWaiting = true;
+            stableCandidate = null;
+            stableCandidateCount = 0;
+            mustSeeWaitingBeforeNextBid = false;
+            cancelBidFlow();
+
+            int r = engine == null ? Prefs.currentRound(this) : engine.getRound();
+            status(r >= 5
+                    ? "نتيجة اللاعب الخامس ✓ — أنتظر نهاية الجيم"
+                    : "نتيجة المزاد ظاهرة ✓ — لا ألمس شيء لحد اللاعب التالي");
             return;
         }
 
         boolean activeAuction = isAuctionActiveScreen(all);
 
-        // We advance only when the result screen disappeared AND a new live auction screen is visible.
         if (resultWaiting && activeAuction) {
             if (guiRound != null) {
                 engine.syncRoundFromScreen(guiRound);
                 Prefs.setCurrentRound(this, guiRound);
-                resultWaiting = false;
-                stableCandidate = null;
-                stableCandidateCount = 0;
-                lastDecision = "جولة جديدة";
-                status("ظهر مزاد اللاعب التالي ✓ — الجولة " + guiRound + "/5");
             } else if (engine != null && engine.getRound() < 5) {
                 engine.advanceRoundFromScreen();
                 Prefs.setCurrentRound(this, engine.getRound());
-                resultWaiting = false;
-                stableCandidate = null;
-                stableCandidateCount = 0;
-                lastDecision = "جولة جديدة";
-                status("ظهر مزاد اللاعب التالي ✓ — الجولة " + engine.getRound() + "/5");
-            } else {
-                status("خلصت 5 مزادات — أنتظر شاشة نهاية الجيم");
-                return;
             }
-        }
 
-        if (now < actionCooldownUntil) {
-            status("تم تنفيذ خطوة ✓ — أتحقق من الشاشة الجديدة قبل أي لمسة أخرى");
+            resultWaiting = false;
+            stableCandidate = null;
+            stableCandidateCount = 0;
+            lastDecision = "NEW";
+            status("ظهر اللاعب التالي ✓ — R" + currentRound() + "/5");
             return;
         }
 
-        // ---------- Safe navigation before the auction ----------
+        // ---------- Normal navigation ----------
         if (!activeAuction) {
             if (containsAny(all, "هاتلي منافس", "هات لي منافس", "find opponent")) {
-                status("وجدت هاتلي منافس — أضغطه");
+                engine.resetSession();
+                Prefs.setCurrentRound(this, 1);
+                status("لقيت «هاتلي منافس» ✓");
                 clickTextAny(root, "هاتلي منافس", "هات لي منافس", "find opponent");
                 return;
             }
 
             if (containsAny(all, "اختر الكارت", "اختار الكارت", "choose card") &&
                     containsAny(all, "المزاد", "auction")) {
-                status("مود المزاد جاهز — أضغط العب");
+                status("مود المزاد جاهز ✓ — أضغط «العب»");
                 clickBestPlayButton(root);
                 return;
             }
 
             if (isGamesHub(all)) {
-                status("صفحة الألعاب ✓ — أفتح المزاد فقط");
+                status("صفحة الألعاب ✓ — أفتح «المزاد» فقط");
                 clickTextAny(root, "المزاد", "auction");
                 return;
             }
 
             if (containsAny(all, "العب الان", "العب الآن", "play now") &&
-                    !containsAny(all, "تاكيد", "تأكيد", "confirm")) {
-                status("الصفحة الرئيسية — أضغط العب الآن");
+                    !containsAny(all, "تأكيد المزايدة", "تاكيد المزايده", "انتظار المزايدة")) {
+                status("الصفحة الرئيسية ✓ — أضغط «العب الآن»");
                 clickTextAny(root, "العب الان", "العب الآن", "play now");
                 return;
             }
         }
 
-        // ---------- Turn detection ----------
-        // New GUI is explicit:
-        // "تأكيد المزايدة" = OUR TURN.
-        // "انتظار المزايدة" = NOT OUR TURN.
-        // Button color/state is only a backup signal if text is hidden from Accessibility.
+        // ---------- Auction turn ----------
+        // In the new GUI these labels are the primary truth:
+        // تأكيد المزايدة = OUR TURN
+        // انتظار المزايدة = OPPONENT TURN
         boolean waitingBidText = containsAny(all,
                 "انتظار المزايدة", "انتظار المزايده",
                 "بانتظار المزايدة", "بانتظار المزايده",
@@ -405,146 +405,57 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         boolean opponentTurnText = containsAny(all,
                 "دور الخصم", "الدور خصمك", "الدور: خصمك",
-                "خصمك يزايد", "خصمك يختار",
-                "opponent turn", "opponent's turn");
+                "خصمك يزايد", "opponent turn", "opponent's turn");
 
         boolean myTurnText = containsAny(all,
                 "دورك", "دورك الان", "دورك الآن",
-                "الدور انت", "الدور: انت",
-                "زايد الان", "زايد الآن", "your turn");
+                "الدور انت", "الدور: انت", "your turn");
 
-        // The waiting label wins over every fallback signal.
-        if (waitingBidText) {
+        if (waitingBidText || (opponentTurnText && !confirmBidText && !myTurnText)) {
             if (awaitingConfirm) {
                 cancelBidFlow();
                 paused = true;
                 Prefs.setBotPaused(this, true);
-                status("ظهر «انتظار المزايدة» قبل Confirm — SAFETY PAUSE");
-            } else {
-                status("«انتظار المزايدة» = مش دورنا — أراقب فقط");
+                status("ظهر «انتظار المزايدة» قبل تأكيدنا — SAFETY PAUSE");
+                return;
             }
+
+            mustSeeWaitingBeforeNextBid = false;
+            status("«انتظار المزايدة» = دور الخصم — أراقب السعر فقط");
+
+            // IMPORTANT: still read the numbers while waiting.
+            // This lets the engine verify OUR previous bid and then learn the opponent's next bid.
+            if (activeAuction) readAuctionSnapshot(false);
             return;
         }
 
-        // Exact label is the main source of truth.
-        if (confirmBidText) {
+        if (confirmBidText || myTurnText) {
             if (awaitingConfirm) {
-                status("«تأكيد المزايدة» ظاهر ✓ — دورنا، أتحقق من Confirm");
+                status("بعد + ما زال «تأكيد المزايدة» ظاهر ✓ — أضغط Confirm");
                 verifyConfirmReady(root);
-            } else if (activeAuction) {
-                status("«تأكيد المزايدة» = دورنا ✓ — أقرأ اللاعب والسعر");
-                readAuctionSnapshot();
+                return;
             }
-            return;
-        }
 
-        if (opponentTurnText && !myTurnText) {
-            status("دور الخصم — لا ألمس أي شيء");
-            return;
-        }
+            if (mustSeeWaitingBeforeNextBid) {
+                status("أكدت المزايدة ✓ — أنتظر «انتظار المزايدة» قبل أي مزايدة جديدة");
+                return;
+            }
 
-        if (myTurnText && activeAuction) {
-            status("الدور دوري ✓ — أقرأ اللاعب والسعر");
-            if (awaitingConfirm) verifyConfirmReady(root);
-            else readAuctionSnapshot();
-            return;
+            if (activeAuction) {
+                status("«تأكيد المزايدة» = دورنا ✓ — أقرأ اللاعب والسعر");
+                readAuctionSnapshot(true);
+                return;
+            }
         }
 
         if (activeAuction) {
-            // Last fallback for WebViews that expose neither Arabic label nor enabled state.
-            verifyTurnByConfirmVisual(awaitingConfirm);
+            // Accessibility tree may occasionally hide the button text in the WebView.
+            // OCR only the calibrated Confirm-button area; never guess from a random pixel.
+            verifyTurnLabelByOcr();
             return;
         }
 
         status("أراقب الشاشة… في انتظار حالة معروفة");
-    }
-
-    private void verifyTurnByConfirmVisual(boolean forPendingConfirm) {
-        if (turnVisualBusy || screenReadBusy || screenshotBusy) return;
-        if (Prefs.getPoint(this, "confirm") == null) {
-            status("زر تأكيد المزايدة غير معروف — اعمل CAL مرة واحدة");
-            return;
-        }
-
-        turnVisualBusy = true;
-        captureBitmap(bmp -> {
-            turnVisualBusy = false;
-
-            if (bmp == null) {
-                status("المزاد ظاهر لكن Screenshot غير متاح — بدون أي كليك");
-                return;
-            }
-
-            boolean green = isConfirmVisuallyActive(bmp);
-            bmp.recycle();
-
-            if (green) {
-                if (forPendingConfirm) {
-                    status("زر تأكيد المزايدة أخضر/مفعّل ✓ — أكمل Confirm");
-                    AccessibilityNodeInfo nowRoot = getRootInActiveWindow();
-                    verifyConfirmReady(nowRoot);
-                } else {
-                    status("زر تأكيد المزايدة أخضر ✓ — ده دورنا");
-                    readAuctionSnapshot();
-                }
-            } else {
-                status("المزاد ظاهر لكن زر تأكيد المزايدة غير مفعّل — أراقب فقط");
-            }
-        });
-    }
-
-    private boolean isConfirmVisuallyActive(Bitmap bmp) {
-        PointF p = Prefs.getPoint(this, "confirm");
-        if (bmp == null || p == null) return false;
-
-        int cx = Math.round(p.x * bmp.getWidth());
-        int cy = Math.round(p.y * bmp.getHeight());
-
-        int rx = Math.max(24, Math.round(bmp.getWidth() * .13f));
-        int ry = Math.max(14, Math.round(bmp.getHeight() * .025f));
-
-        int l = Math.max(0, cx - rx);
-        int r = Math.min(bmp.getWidth() - 1, cx + rx);
-        int t = Math.max(0, cy - ry);
-        int b = Math.min(bmp.getHeight() - 1, cy + ry);
-
-        int sx = Math.max(1, (r - l) / 42);
-        int sy = Math.max(1, (b - t) / 16);
-
-        int greenPixels = 0;
-        int useful = 0;
-        long sumR = 0, sumG = 0, sumB = 0;
-
-        for (int y = t; y <= b; y += sy) {
-            for (int x = l; x <= r; x += sx) {
-                int c = bmp.getPixel(x, y);
-                int rr = Color.red(c);
-                int gg = Color.green(c);
-                int bb = Color.blue(c);
-
-                // Skip near-white text and very dark shadow pixels.
-                if (rr > 225 && gg > 225 && bb > 225) continue;
-                if (rr < 25 && gg < 25 && bb < 25) continue;
-
-                useful++;
-                sumR += rr;
-                sumG += gg;
-                sumB += bb;
-
-                if (gg >= 95 && gg > rr + 28 && gg > bb + 16) greenPixels++;
-            }
-        }
-
-        if (useful < 20) return false;
-
-        double greenRatio = (double) greenPixels / useful;
-        double avgR = (double) sumR / useful;
-        double avgG = (double) sumG / useful;
-        double avgB = (double) sumB / useful;
-
-        // The active Confirm button in the new GUI is strongly green.
-        return greenRatio >= .24 ||
-                (avgG >= 95 && avgG > avgR + 24 && avgG > avgB + 12);
     }
 
     private Integer extractGuiRound(String all) {
@@ -603,92 +514,71 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void handlePostMatch(AccessibilityNodeInfo root, String all) {
-        // Highest priority at any post-match stage: if "return home" is visible, use it.
-        AccessibilityNodeInfo home = findVisibleTextAny(root,
-                "العوده للرئيسيه", "العودة للرئيسية",
-                "العوده للصفحه الرئيسيه", "العودة للصفحة الرئيسية",
-                "العوده للقائمه الرئيسيه", "العودة للقائمة الرئيسية",
-                "القائمه الرئيسيه", "القائمة الرئيسية",
-                "return to main", "return home", "main menu");
-
-        if ((postMatchStage == 1 || postMatchStage == 2) && home != null) {
-            status("لقيت «العودة للرئيسية» ✓ — أضغطها");
-            if (clickNode(home)) {
-                onMatchCompleted();
-                postMatchStage = 3;
-                postMatchSwipeAttempts = 0;
-            }
-            return;
-        }
+        long now = System.currentTimeMillis();
 
         if (postMatchStage == 1) {
-            AccessibilityNodeInfo lineups = findVisibleTextAny(root,
-                    "عرض التشكيلات", "عرض تشكيلات", "التشكيلات",
-                    "عرض النتائج", "عرض النتيجه", "عرض النتيجة",
-                    "view lineups", "view teams", "view results");
+            AccessibilityNodeInfo n = findVisibleTextAny(root,
+                    "عرض التشكيلات", "عرض النتائج",
+                    "عرض النتيجه", "عرض النتيجة", "التشكيلات",
+                    "view lineups", "view results");
 
-            if (lineups != null) {
+            if (n != null) {
                 status("لقيت «عرض التشكيلات/النتائج» ✓ — أضغطه");
-                if (clickNode(lineups)) {
+                if (clickNode(n)) {
                     postMatchStage = 2;
                     postMatchSwipeAttempts = 0;
+                    postActionNotBefore = now + ACTION_DEBOUNCE_MS;
+                    queueScan(ACTION_DEBOUNCE_MS + 120);
                 }
                 return;
             }
 
-            // Some versions go directly to simulation/continue without a lineups button.
-            AccessibilityNodeInfo next = findVisibleTextAny(root,
-                    "محاكاه المباراه", "محاكاة المباراة",
-                    "ابدأ المحاكاه", "ابدأ المحاكاة",
-                    "بدء المحاكاه", "بدء المحاكاة",
-                    "لعب المباراه", "لعب المباراة",
-                    "استمرار", "متابعه", "متابعة",
-                    "مشاهده النتيجه", "مشاهدة النتيجة",
-                    "simulate", "continue", "show result");
-
-            if (next != null) {
-                status("لقيت خطوة المباراة/النتيجة ✓ — أضغطها");
-                if (clickNode(next)) {
-                    postMatchStage = 2;
-                    postMatchSwipeAttempts = 0;
-                }
+            postMatchSwipeAttempts++;
+            if (postMatchSwipeAttempts > 45) {
+                paused = true;
+                Prefs.setBotPaused(this, true);
+                status("دورت 45 مرة ومش لاقي «عرض التشكيلات/النتائج» — PAUSE");
                 return;
             }
 
-            scrollPostMatchFor(
-                    "عرض التشكيلات / النتائج / المحاكاة",
-                    36
-            );
+            status("مش ظاهر — Swipe لتحت #" + postMatchSwipeAttempts +
+                    " وأعيد البحث عن «عرض التشكيلات/النتائج»");
+            swipePageDown();
             return;
         }
 
         if (postMatchStage == 2) {
-            // After lineups, keep following only known post-game words.
-            AccessibilityNodeInfo next = findVisibleTextAny(root,
-                    "محاكاه المباراه", "محاكاة المباراة",
-                    "ابدأ المحاكاه", "ابدأ المحاكاة",
-                    "بدء المحاكاه", "بدء المحاكاة",
-                    "ابدأ المباراه", "ابدأ المباراة",
-                    "لعب المباراه", "لعب المباراة",
-                    "استمرار", "متابعه", "متابعة",
-                    "عرض النتيجه", "عرض النتيجة",
-                    "مشاهده النتيجه", "مشاهدة النتيجة",
-                    "simulate match", "simulate", "continue", "show result");
+            AccessibilityNodeInfo n = findVisibleTextAny(root,
+                    "العوده للرئيسيه", "العودة للرئيسية",
+                    "العوده للصفحه الرئيسيه", "العودة للصفحة الرئيسية",
+                    "العوده للقائمه الرئيسيه", "العودة للقائمة الرئيسية",
+                    "القائمه الرئيسيه", "القائمة الرئيسية",
+                    "return to main", "return home", "main menu");
 
-            if (next != null) {
-                status("لقيت زر الخطوة التالية ✓ — أضغطه ثم أعيد قراءة الشاشة");
-                if (clickNode(next)) {
+            if (n != null) {
+                status("لقيت «العودة للرئيسية» ✓ — أضغطها");
+                if (clickNode(n)) {
+                    onMatchCompleted();
+                    postMatchStage = 3;
+                    returnToMainClickedAt = now;
                     postMatchSwipeAttempts = 0;
+                    postActionNotBefore = now + ACTION_DEBOUNCE_MS;
+                    queueScan(ACTION_DEBOUNCE_MS + 120);
                 }
                 return;
             }
 
-            // Exact Hidden-Player behaviour: if target words are not visible,
-            // scroll DOWN, reread the screen, and repeat. No blind coordinate click.
-            scrollPostMatchFor(
-                    "العودة للرئيسية / استمرار / عرض النتيجة",
-                    42
-            );
+            postMatchSwipeAttempts++;
+            if (postMatchSwipeAttempts > 45) {
+                paused = true;
+                Prefs.setBotPaused(this, true);
+                status("دورت 45 مرة ومش لاقي «العودة للرئيسية» — PAUSE");
+                return;
+            }
+
+            status("بعد التشكيلات — Swipe لتحت #" + postMatchSwipeAttempts +
+                    " وأدور على «العودة للرئيسية»");
+            swipePageDown();
             return;
         }
 
@@ -698,12 +588,14 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 return;
             }
 
-            if (isGamesHub(all)) {
-                status("وصلت صفحة الألعاب ✓ — الآن فقط أضغط السهم الرمادي");
-                grayArrowAttempts++;
+            boolean gamesHub = isGamesHub(all);
+            if (gamesHub) {
+                status("وصلت صفحة الألعاب ✓ — أضغط السهم الرمادي");
                 tapGrayGamesArrow();
             } else {
-                status("ضغطت الرئيسية ✓ — أراقب لحد ما أشوف صفحة الألعاب فعليًا");
+                long waited = Math.max(0, now - returnToMainClickedAt);
+                status("ضغطت الرئيسية ✓ — أنتظر صفحة الألعاب قبل السهم (" +
+                        (waited / 1000) + "s)");
             }
             return;
         }
@@ -711,17 +603,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if (postMatchStage == 4) {
             if (containsAny(all, "العب الان", "العب الآن", "play now")) {
                 finishReturnCycle(root);
-                return;
+            } else {
+                status("ضغطت سهم الألعاب ✓ — أنتظر الصفحة الرئيسية");
             }
-
-            if (isGamesHub(all) && grayArrowAttempts < 4) {
-                status("صفحة الألعاب ما زالت ظاهرة — أعيد السهم بعد تحقق الشاشة");
-                grayArrowAttempts++;
-                tapGrayGamesArrow();
-                return;
-            }
-
-            status("السهم اتضغط — أراقب لحد ما الصفحة الرئيسية تظهر");
         }
     }
 
@@ -751,8 +635,11 @@ public class AuctionAccessibilityService extends AccessibilityService {
         clearSessionScreenState();
         Prefs.setCurrentRound(this, 1);
         postMatchStage = 0;
-        status("الرئيسية جاهزة ✓ — أبدأ جيم مزاد جديدة");
-        clickTextAny(root, "العب الان", "العب الآن", "play now");
+        status("الرئيسية جاهزة ✓ — أبدأ لوب مزاد جديدة");
+        if (clickTextAny(root, "العب الان", "العب الآن", "play now")) {
+            actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
+            queueScan(ACTION_DEBOUNCE_MS + 120);
+        }
     }
 
     private void onMatchCompleted() {
@@ -770,8 +657,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     // ---------- OCR / state reading ----------
 
-    private void readAuctionSnapshot() {
+    private void readAuctionSnapshot(boolean allowAction) {
         if (screenReadBusy || bidFlowInProgress) return;
+
         if (!Prefs.isCalibrated(this)) {
             paused = true;
             Prefs.setBotPaused(this, true);
@@ -780,12 +668,13 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
 
         screenReadBusy = true;
+
         captureBitmap(bmp -> {
             if (bmp == null) {
                 screenReadBusy = false;
                 stableCandidate = null;
                 stableCandidateCount = 0;
-                status("تعذر أخذ Screenshot — لا قرار ولا كليك");
+                status("تعذر Screenshot — بدون قرار أو كليك");
                 return;
             }
 
@@ -798,10 +687,11 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 sinks[i] = value -> {
                     vals[index] = value;
                     done[0]++;
+
                     if (done[0] == 4) {
                         bmp.recycle();
                         screenReadBusy = false;
-                        handleSnapshot(vals[0], vals[1], vals[2], vals[3]);
+                        handleSnapshot(vals[0], vals[1], vals[2], vals[3], allowAction);
                     }
                 };
             }
@@ -925,7 +815,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
     }
 
-    private void handleSnapshot(Integer rating, Integer price, Integer mine, Integer opp) {
+    private void handleSnapshot(Integer rating, Integer price, Integer mine, Integer opp,
+                                boolean allowAction) {
         boolean valid = rating != null && rating >= 50 && rating <= 99 &&
                 price != null && price >= 0 && price <= 100 &&
                 mine != null && mine >= 0 && mine <= 100 &&
@@ -934,17 +825,21 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if (!valid) {
             stableCandidate = null;
             stableCandidateCount = 0;
-            status("OCR غير مؤكد: OVR " + show(rating) + " | Price " + show(price) +
-                    " | You " + show(mine) + " | Opp " + show(opp) + " — لا ألمس الشاشة");
+            status("OCR غير مؤكد: OVR " + show(rating) +
+                    " | Price " + show(price) +
+                    " | You " + show(mine) +
+                    " | Opp " + show(opp) +
+                    " — لا ألمس الشاشة");
             return;
         }
 
-        AuctionEngine.Snapshot s = new AuctionEngine.Snapshot(rating, price, mine, opp, true);
+        AuctionEngine.Snapshot snap =
+                new AuctionEngine.Snapshot(rating, price, mine, opp, true);
 
-        if (stableCandidate != null && s.sameValues(stableCandidate)) {
+        if (stableCandidate != null && snap.sameValues(stableCandidate)) {
             stableCandidateCount++;
         } else {
-            stableCandidate = s;
+            stableCandidate = snap;
             stableCandidateCount = 1;
         }
 
@@ -955,14 +850,16 @@ public class AuctionAccessibilityService extends AccessibilityService {
         refreshOverlay();
 
         if (stableCandidateCount < 2) {
-            status("قراءة 1/2: OVR " + rating + " | " + price + "M | You " + mine + " | Opp " + opp + " — أتحقق مرة ثانية");
+            status((allowAction ? "دوري" : "مراقبة") +
+                    " • قراءة 1/2: OVR " + rating +
+                    " | " + price + "M | Y" + mine + " | O" + opp);
             return;
         }
 
-        stableCandidateCount = 0;
         stableCandidate = null;
+        stableCandidateCount = 0;
 
-        AuctionEngine.Decision d = engine.onStableSnapshot(s);
+        AuctionEngine.Decision d = engine.onStableSnapshot(snap);
         lastDecision = d.action.name();
         Prefs.setCurrentRound(this, engine.getRound());
         Prefs.saveLastSnapshot(this, rating, price, mine, opp, lastDecision);
@@ -971,25 +868,31 @@ public class AuctionAccessibilityService extends AccessibilityService {
         String base = "R" + d.round + "/5 " + slot +
                 " • OVR " + rating +
                 " • " + price + "M" +
-                " • You " + mine + "M" +
-                " • Opp " + opp + "M" +
-                "\nOpp type: " + d.opponentStyle +
-                " " + d.opponentConfidence + "%";
+                " • Y" + mine +
+                " • O" + opp +
+                " • " + d.opponentStyle;
+
+        if (!allowAction) {
+            status(base + " • OBSERVE");
+            refreshOverlay();
+            return;
+        }
 
         if (d.action == AuctionEngine.Action.BID) {
-            status(base + "\nBID +1 • cap " + d.hardCap + "M • " + d.reason);
-            executeBid(s);
+            status(base + " • BID +1 • cap " + d.hardCap + "M");
+            executeBid(snap);
         } else if (d.action == AuctionEngine.Action.PASS) {
-            status(base + "\nPASS — سيبه للخصم/Free Player • " + d.reason);
+            status(base + " • PASS • " + d.reason);
         } else if (d.action == AuctionEngine.Action.SAFETY_PAUSE) {
             paused = true;
             Prefs.setBotPaused(this, true);
-            status(base + "\nSAFETY PAUSE — " + d.reason);
+            status(base + " • SAFETY PAUSE");
         } else if (d.action == AuctionEngine.Action.COMPLETE) {
-            status("خلصت 5 مزادات — أراقب نهاية الجيم");
+            status("خلصت 5 مزادات ✓ — أراقب نهاية الجيم");
         } else {
-            status(base + "\nWAIT — " + d.reason);
+            status(base + " • WAIT");
         }
+
         refreshOverlay();
     }
 
@@ -1040,81 +943,62 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     // ---------- + then Confirm: verified two-step flow ----------
 
-    private void executeBid(AuctionEngine.Snapshot s) {
-        if (bidFlowInProgress || awaitingConfirm) return;
+    private void executeBid(AuctionEngine.Snapshot snap) {
+        if (bidFlowInProgress || awaitingConfirm || mustSeeWaitingBeforeNextBid) return;
+        if (System.currentTimeMillis() < actionCooldownUntil) return;
 
         bidFlowInProgress = true;
-        engine.markOwnBidStarted(s.price);
-        status("قرار BID +1 ✓ — آخذ بصمة زر Confirm قبل الضغط على +");
+        engine.markOwnBidStarted(snap.price);
+        status("قرار BID ✓ — أضغط + مرة واحدة");
 
-        captureBitmap(bmp -> {
-            if (bmp == null) {
+        clickPlusSmart(ok -> {
+            bidFlowInProgress = false;
+
+            if (!ok) {
                 engine.cancelPending();
-                bidFlowInProgress = false;
                 paused = true;
                 Prefs.setBotPaused(this, true);
-                status("لم أقدر أتحقق بصريًا قبل + — SAFETY PAUSE");
+                status("زر + لم يتأكد — SAFETY PAUSE");
                 return;
             }
 
-            confirmBaseline = fingerprintAtSavedPoint(bmp, "confirm");
-            bmp.recycle();
-
-            clickPlusSmart(ok -> {
-                if (!ok) {
-                    engine.cancelPending();
-                    bidFlowInProgress = false;
-                    paused = true;
-                    Prefs.setBotPaused(this, true);
-                    status("زر + لم يتأكد أنه اتضغط — SAFETY PAUSE");
-                    return;
-                }
-
-                bidFlowInProgress = false;
-                awaitingConfirm = true;
-                confirmVerifyCount = 0;
-                actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
-                status("زر + اتضغط ✓ — لن أضغط Confirm إلا بعد ما الشاشة تثبت أنه اتفعل");
-                queueScan(ACTION_DEBOUNCE_MS + 60);
-            });
+            awaitingConfirm = true;
+            actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
+            status("+ اتضغط ✓ — أنتظر ثانية ثم أتحقق من «تأكيد المزايدة»");
+            queueScan(ACTION_DEBOUNCE_MS + 120);
         });
     }
 
     private void verifyConfirmReady(AccessibilityNodeInfo root) {
-        confirmVerifyCount++;
+        if (!awaitingConfirm) return;
+        if (System.currentTimeMillis() < actionCooldownUntil) return;
+
+        String raw = root == null ? "" : collectVisibleText(root);
+        String all = normalize(raw);
+
+        if (containsAny(all, "انتظار المزايدة", "انتظار المزايده",
+                "waiting bid", "waiting for bid")) {
+            engine.cancelPending();
+            awaitingConfirm = false;
+            paused = true;
+            Prefs.setBotPaused(this, true);
+            status("بعد + ظهرت «انتظار المزايدة» قبل Confirm — SAFETY PAUSE");
+            return;
+        }
 
         AccessibilityNodeInfo c = findVisibleTextAny(root,
-                "confirm", "confirm bid", "place bid", "تأكيد", "تاكيد", "تأكيد المزايدة", "تاكيد المزايده");
+                "تأكيد المزايدة", "تاكيد المزايده",
+                "تأكيد مزايدة", "تاكيد مزايدة",
+                "confirm bid", "confirm");
 
-        if (c != null && isEnabledClickable(c)) {
-            status("Confirm أصبح Enabled ✓ — أضغطه مرة واحدة");
+        if (c != null) {
+            status("«تأكيد المزايدة» ما زال ظاهر ✓ — أضغطه مرة واحدة");
             clickConfirmAndFinalize();
             return;
         }
 
-        captureBitmap(bmp -> {
-            if (bmp == null) {
-                if (confirmVerifyCount >= 12) pauseConfirmUnverified();
-                else status("أتحقق من Confirm… Screenshot غير متاح الآن، بدون كليك");
-                return;
-            }
-
-            int[] now = fingerprintAtSavedPoint(bmp, "confirm");
-            bmp.recycle();
-            int diff = colorDifference(confirmBaseline, now);
-
-            if (confirmBaseline != null && now != null && diff >= 18) {
-                status("شكل/لون Confirm اتغير بعد + ✓ — أضغط Confirm");
-                clickConfirmAndFinalize();
-                return;
-            }
-
-            if (confirmVerifyCount >= 12) {
-                pauseConfirmUnverified();
-            } else {
-                status("Plus اتضغط، لكن Confirm لسه مش متأكد (" + confirmVerifyCount + "/12) — لا أضغط");
-            }
-        });
+        status("بعد + لم أقرأ زر Confirm بوضوح — أتحقق منه بالـOCR فقط");
+        verifyTurnLabelByOcr();
     }
 
     private void pauseConfirmUnverified() {
@@ -1123,11 +1007,13 @@ public class AuctionAccessibilityService extends AccessibilityService {
         bidFlowInProgress = false;
         paused = true;
         Prefs.setBotPaused(this, true);
-        status("Plus اتضغط لكن Confirm لم يتم التحقق منه — SAFETY PAUSE بدل أي كليك غلط");
+        status("Confirm غير مؤكد — SAFETY PAUSE");
     }
 
     private void clickConfirmAndFinalize() {
         if (!awaitingConfirm) return;
+        if (System.currentTimeMillis() < actionCooldownUntil) return;
+
         clickConfirmSmart(ok -> {
             if (!ok) {
                 engine.cancelPending();
@@ -1140,11 +1026,94 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
             engine.markConfirmDispatched();
             awaitingConfirm = false;
-            confirmVerifyCount = 0;
-            confirmBaseline = null;
+            bidFlowInProgress = false;
+            mustSeeWaitingBeforeNextBid = true;
+
             actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
-            status("Confirm اتضغط ✓ — أراقب السعر/الميزانية على الشاشة للتأكد من المزايدة");
-            queueScan(ACTION_DEBOUNCE_MS + 60);
+            status("Confirm اتضغط ✓ — أنتظر ثانية ثم «انتظار المزايدة»");
+            queueScan(ACTION_DEBOUNCE_MS + 120);
+        });
+    }
+
+    private void verifyTurnLabelByOcr() {
+        if (turnVisualBusy || screenshotBusy) return;
+
+        PointF p = Prefs.getPoint(this, "confirm");
+        if (p == null) {
+            status("مكان Confirm مش محفوظ — اعمل CAL");
+            return;
+        }
+
+        turnVisualBusy = true;
+
+        captureBitmap(bmp -> {
+            turnVisualBusy = false;
+
+            if (bmp == null) {
+                status("تعذر قراءة زر المزايدة — بدون كليك");
+                return;
+            }
+
+            int cx = Math.round(p.x * bmp.getWidth());
+            int cy = Math.round(p.y * bmp.getHeight());
+
+            int rx = Math.max(80, Math.round(bmp.getWidth() * .22f));
+            int ry = Math.max(28, Math.round(bmp.getHeight() * .045f));
+
+            int l = Math.max(0, cx - rx);
+            int r = Math.min(bmp.getWidth(), cx + rx);
+            int t = Math.max(0, cy - ry);
+            int b = Math.min(bmp.getHeight(), cy + ry);
+
+            Bitmap crop;
+            try {
+                crop = Bitmap.createBitmap(bmp, l, t, Math.max(1, r-l), Math.max(1, b-t));
+            } catch (Exception e) {
+                bmp.recycle();
+                status("تعذر قص منطقة زر المزايدة");
+                return;
+            }
+            bmp.recycle();
+
+            Bitmap big = Bitmap.createScaledBitmap(crop,
+                    crop.getWidth() * 3, crop.getHeight() * 3, true);
+            crop.recycle();
+
+            recognizer.process(InputImage.fromBitmap(big, 0))
+                    .addOnSuccessListener(tx -> {
+                        String label = normalize(tx.getText());
+                        big.recycle();
+
+                        if (containsAny(label,
+                                "انتظار المزايدة", "انتظار المزايده",
+                                "waiting bid", "waiting for bid")) {
+                            mustSeeWaitingBeforeNextBid = false;
+                            status("OCR: «انتظار المزايدة» ✓ — دور الخصم");
+                            readAuctionSnapshot(false);
+                            return;
+                        }
+
+                        if (containsAny(label,
+                                "تأكيد المزايدة", "تاكيد المزايده",
+                                "confirm bid", "confirm")) {
+                            if (awaitingConfirm) {
+                                status("OCR: «تأكيد المزايدة» ✓ — أضغط Confirm");
+                                clickConfirmAndFinalize();
+                            } else if (!mustSeeWaitingBeforeNextBid) {
+                                status("OCR: «تأكيد المزايدة» ✓ — دورنا");
+                                readAuctionSnapshot(true);
+                            } else {
+                                status("OCR: Confirm ظاهر لكن أنتظر مرور دور الخصم أولًا");
+                            }
+                            return;
+                        }
+
+                        status("زر المزايدة غير مقروء بوضوح — لا ألمس شيء");
+                    })
+                    .addOnFailureListener(e -> {
+                        big.recycle();
+                        status("OCR زر المزايدة فشل — لا ألمس شيء");
+                    });
         });
     }
 
