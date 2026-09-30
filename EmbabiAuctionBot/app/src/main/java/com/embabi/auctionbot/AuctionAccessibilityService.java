@@ -75,7 +75,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private View floatingView;
     private WindowManager.LayoutParams floatingLp;
     private boolean overlayExpanded = true;
-    private TextView ovStatus, ovRunState, ovRound, ovRating, ovPrice, ovBudgets, ovDecision, ovMin, ovRepeat;
+    private TextView ovStatus, ovRunState, ovRound, ovRating, ovPrice, ovBudgets, ovDecision, ovRepeat;
+    private final TextView[] ovPlayerMins = new TextView[5];
 
     // Calibration overlay
     private View calibrationRoot;
@@ -370,57 +371,70 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
 
         // ---------- Turn detection ----------
-        // New GUI rule: the strongest signal for OUR turn is the green/enabled
-        // "تأكيد المزايدة" button. Text such as "دورك" is only a secondary signal.
-        boolean opponentTurn = containsAny(all,
-                "دور الخصم", "الدور خصمك", "الدور: خصمك", "خصمك يزايد", "خصمك يختار",
+        // New GUI is explicit:
+        // "تأكيد المزايدة" = OUR TURN.
+        // "انتظار المزايدة" = NOT OUR TURN.
+        // Button color/state is only a backup signal if text is hidden from Accessibility.
+        boolean waitingBidText = containsAny(all,
+                "انتظار المزايدة", "انتظار المزايده",
+                "بانتظار المزايدة", "بانتظار المزايده",
+                "waiting bid", "waiting for bid");
+
+        boolean confirmBidText = containsAny(all,
+                "تأكيد المزايدة", "تاكيد المزايده",
+                "تأكيد مزايدة", "تاكيد مزايدة",
+                "confirm bid");
+
+        boolean opponentTurnText = containsAny(all,
+                "دور الخصم", "الدور خصمك", "الدور: خصمك",
+                "خصمك يزايد", "خصمك يختار",
                 "opponent turn", "opponent's turn");
 
         boolean myTurnText = containsAny(all,
-                "دورك", "دورك الان", "دورك الآن", "الدور انت", "الدور: انت",
+                "دورك", "دورك الان", "دورك الآن",
+                "الدور انت", "الدور: انت",
                 "زايد الان", "زايد الآن", "your turn");
 
-        AccessibilityNodeInfo confirmTurnNode = findVisibleTextAny(root,
-                "تأكيد المزايدة", "تاكيد المزايده", "تأكيد مزايدة", "تاكيد مزايدة",
-                "confirm bid", "confirm");
-        boolean confirmEnabled = confirmTurnNode != null && isEnabledClickable(confirmTurnNode);
-        boolean myTurn = confirmEnabled || myTurnText;
-
-        if (opponentTurn && !myTurn) {
+        // The waiting label wins over every fallback signal.
+        if (waitingBidText) {
             if (awaitingConfirm) {
                 cancelBidFlow();
                 paused = true;
                 Prefs.setBotPaused(this, true);
-                status("الدور اتغير قبل ما Confirm يتأكد — SAFETY PAUSE");
+                status("ظهر «انتظار المزايدة» قبل Confirm — SAFETY PAUSE");
             } else {
-                status("دور الخصم — زر تأكيد المزايدة غير مفعّل، لا ألمس أي شيء");
+                status("«انتظار المزايدة» = مش دورنا — أراقب فقط");
             }
             return;
         }
 
-        if (awaitingConfirm) {
-            if (confirmEnabled || myTurnText) {
+        // Exact label is the main source of truth.
+        if (confirmBidText) {
+            if (awaitingConfirm) {
+                status("«تأكيد المزايدة» ظاهر ✓ — دورنا، أتحقق من Confirm");
                 verifyConfirmReady(root);
             } else if (activeAuction) {
-                // Some WebViews do not expose enabled/disabled state to Accessibility.
-                // In that case verify the calibrated Confirm button visually.
-                verifyTurnByConfirmVisual(true);
+                status("«تأكيد المزايدة» = دورنا ✓ — أقرأ اللاعب والسعر");
+                readAuctionSnapshot();
             }
             return;
         }
 
-        if (myTurn && activeAuction) {
-            status(confirmEnabled
-                    ? "زر تأكيد المزايدة مفعّل ✓ — ده دورنا، أقرأ اللاعب والسعر"
-                    : "الدور دوري ✓ — أقرأ اللاعب والسعر");
-            readAuctionSnapshot();
+        if (opponentTurnText && !myTurnText) {
+            status("دور الخصم — لا ألمس أي شيء");
+            return;
+        }
+
+        if (myTurnText && activeAuction) {
+            status("الدور دوري ✓ — أقرأ اللاعب والسعر");
+            if (awaitingConfirm) verifyConfirmReady(root);
+            else readAuctionSnapshot();
             return;
         }
 
         if (activeAuction) {
-            // Do not give up just because the page did not expose "دورك".
-            // The new auction GUI uses the Confirm button state, so inspect its color.
-            verifyTurnByConfirmVisual(false);
+            // Last fallback for WebViews that expose neither Arabic label nor enabled state.
+            verifyTurnByConfirmVisual(awaitingConfirm);
             return;
         }
 
@@ -1325,7 +1339,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(10), dp(8), dp(10), dp(10));
+        box.setPadding(dp(8), dp(6), dp(8), dp(7));
         box.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         box.setBackground(round(Color.argb(244,7,18,32), Color.rgb(84,78,220), 16));
 
@@ -1333,25 +1347,25 @@ public class AuctionAccessibilityService extends AccessibilityService {
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
 
-        TextView title = ovText("◈ AUCTION GENIUS", 14, Color.WHITE, true);
+        TextView title = ovText("◈ AUCTION GENIUS", 12.5f, Color.WHITE, true);
         title.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
         TextView collapse = ovText(expanded ? "—" : "☰", 20, Color.rgb(160,186,255), true);
         collapse.setGravity(Gravity.CENTER);
         TextView close = ovText("×", 22, Color.rgb(255,105,125), true);
         close.setGravity(Gravity.CENTER);
 
-        head.addView(title, new LinearLayout.LayoutParams(0, dp(38), 1));
-        head.addView(collapse, new LinearLayout.LayoutParams(dp(42), dp(38)));
-        head.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
+        head.addView(title, new LinearLayout.LayoutParams(0, dp(32), 1));
+        head.addView(collapse, new LinearLayout.LayoutParams(dp(36), dp(32)));
+        head.addView(close, new LinearLayout.LayoutParams(dp(36), dp(32)));
         box.addView(head);
 
         if (expanded) {
             ovRunState = ovText("", 12, Color.rgb(0,230,150), true);
             box.addView(ovRunState);
 
-            ovStatus = ovText(lastStatus, 11, Color.rgb(207,219,239), false);
-            ovStatus.setMaxLines(4);
-            ovStatus.setPadding(0, dp(4), 0, dp(7));
+            ovStatus = ovText(lastStatus, 10, Color.rgb(207,219,239), false);
+            ovStatus.setMaxLines(2);
+            ovStatus.setPadding(0, dp(2), 0, dp(4));
             box.addView(ovStatus);
 
             LinearLayout row1 = new LinearLayout(this);
@@ -1359,11 +1373,11 @@ public class AuctionAccessibilityService extends AccessibilityService {
             ovRound = chip("R" + currentRound() + "/5", Color.rgb(15,45,67));
             ovRating = chip("OVR " + show(lastRating), Color.rgb(15,45,67));
             ovPrice = chip("Price " + show(lastPrice) + "M", Color.rgb(15,45,67));
-            row1.addView(ovRound, new LinearLayout.LayoutParams(0, dp(36), 1));
+            row1.addView(ovRound, new LinearLayout.LayoutParams(0, dp(31), 1));
             addGap(row1, 5);
-            row1.addView(ovRating, new LinearLayout.LayoutParams(0, dp(36), 1));
+            row1.addView(ovRating, new LinearLayout.LayoutParams(0, dp(31), 1));
             addGap(row1, 5);
-            row1.addView(ovPrice, new LinearLayout.LayoutParams(0, dp(36), 1));
+            row1.addView(ovPrice, new LinearLayout.LayoutParams(0, dp(31), 1));
             box.addView(row1);
 
             LinearLayout row2 = new LinearLayout(this);
@@ -1371,9 +1385,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
             ovBudgets = chip("You " + show(lastMine) + "M • Opp " + show(lastOpp) + "M", Color.rgb(15,45,67));
             ovDecision = chip(lastDecision, Color.rgb(15,45,67));
             row2.setPadding(0, dp(5), 0, 0);
-            row2.addView(ovBudgets, new LinearLayout.LayoutParams(0, dp(36), 2));
+            row2.addView(ovBudgets, new LinearLayout.LayoutParams(0, dp(31), 2));
             addGap(row2, 5);
-            row2.addView(ovDecision, new LinearLayout.LayoutParams(0, dp(36), 1));
+            row2.addView(ovDecision, new LinearLayout.LayoutParams(0, dp(31), 1));
             box.addView(row2);
 
             LinearLayout controls = new LinearLayout(this);
@@ -1385,29 +1399,32 @@ public class AuctionAccessibilityService extends AccessibilityService {
             start.setOnClickListener(v -> startBot(true));
             pause.setOnClickListener(v -> togglePause());
             stop.setOnClickListener(v -> stopBot("تم إيقاف البوت يدويًا"));
-            controls.addView(start, new LinearLayout.LayoutParams(0, dp(43), 1));
+            controls.addView(start, new LinearLayout.LayoutParams(0, dp(37), 1));
             addGap(controls, 5);
-            controls.addView(pause, new LinearLayout.LayoutParams(0, dp(43), 1));
+            controls.addView(pause, new LinearLayout.LayoutParams(0, dp(37), 1));
             addGap(controls, 5);
-            controls.addView(stop, new LinearLayout.LayoutParams(0, dp(43), 1));
+            controls.addView(stop, new LinearLayout.LayoutParams(0, dp(37), 1));
             box.addView(controls);
 
-            LinearLayout minRow = new LinearLayout(this);
-            minRow.setOrientation(LinearLayout.HORIZONTAL);
-            minRow.setGravity(Gravity.CENTER_VERTICAL);
-            minRow.setPadding(0, dp(7), 0, 0);
-            TextView lab = ovText("Min " + currentSlotName(), 12, Color.rgb(166,185,210), true);
-            Button minus = ovButton("−", Color.rgb(24,45,68));
-            Button plus = ovButton("+", Color.rgb(24,45,68));
-            ovMin = ovText(String.valueOf(Prefs.getMinRating(this, Math.max(0,currentRound()-1))), 21, Color.WHITE, true);
-            ovMin.setGravity(Gravity.CENTER);
-            minRow.addView(lab, new LinearLayout.LayoutParams(0, dp(42), 1));
-            minRow.addView(minus, new LinearLayout.LayoutParams(dp(45), dp(42)));
-            minRow.addView(ovMin, new LinearLayout.LayoutParams(dp(55), dp(42)));
-            minRow.addView(plus, new LinearLayout.LayoutParams(dp(45), dp(42)));
-            minus.setOnClickListener(v -> changeCurrentMin(-1));
-            plus.setOnClickListener(v -> changeCurrentMin(1));
-            box.addView(minRow);
+            TextView limitsTitle = ovText("MIN RATINGS", 9.5f, Color.rgb(166,185,210), true);
+            limitsTitle.setPadding(0, dp(5), 0, dp(2));
+            box.addView(limitsTitle);
+
+            LinearLayout players = new LinearLayout(this);
+            players.setOrientation(LinearLayout.HORIZONTAL);
+            String[] pNames = {"GK", "DEF", "CM1", "CM2", "ST"};
+            int activeSlot = Math.max(0, Math.min(4, currentRound() - 1));
+            for (int i = 0; i < 5; i++) {
+                String text = pNames[i] + "\n" + Prefs.getMinRating(this, i);
+                int fill = i == activeSlot ? Color.rgb(78,58,180) : Color.rgb(15,45,67);
+                TextView p = chip(text, fill);
+                p.setTextSize(9.5f);
+                p.setGravity(Gravity.CENTER);
+                ovPlayerMins[i] = p;
+                players.addView(p, new LinearLayout.LayoutParams(0, dp(37), 1));
+                if (i < 4) addGap(players, 3);
+            }
+            box.addView(players);
 
             LinearLayout tools = new LinearLayout(this);
             tools.setOrientation(LinearLayout.HORIZONTAL);
@@ -1416,9 +1433,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
             Button test = ovButton("◎ TEST OCR", Color.rgb(34,58,86));
             cal.setOnClickListener(v -> startCalibration());
             test.setOnClickListener(v -> testOcr());
-            tools.addView(cal, new LinearLayout.LayoutParams(0, dp(42), 1));
+            tools.addView(cal, new LinearLayout.LayoutParams(0, dp(37), 1));
             addGap(tools, 5);
-            tools.addView(test, new LinearLayout.LayoutParams(0, dp(42), 1));
+            tools.addView(test, new LinearLayout.LayoutParams(0, dp(37), 1));
             box.addView(tools);
 
             ovRepeat = ovText(repeatLabel(), 11, Color.rgb(166,185,210), true);
@@ -1439,14 +1456,14 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         floatingView = box;
         floatingLp = new WindowManager.LayoutParams(
-                dp(340), -2,
+                dp(296), -2,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
                         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT);
         floatingLp.gravity = Gravity.TOP | Gravity.START;
-        floatingLp.x = dp(10);
-        floatingLp.y = dp(95);
+        floatingLp.x = dp(8);
+        floatingLp.y = dp(82);
 
         final float[] touch = new float[4];
         title.setOnTouchListener((v, e) -> {
@@ -1497,7 +1514,16 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if (ovPrice != null) ovPrice.setText("Price " + show(lastPrice) + "M");
         if (ovBudgets != null) ovBudgets.setText("You " + show(lastMine) + "M • Opp " + show(lastOpp) + "M");
         if (ovDecision != null) ovDecision.setText(lastDecision == null ? "—" : lastDecision);
-        if (ovMin != null) ovMin.setText(String.valueOf(Prefs.getMinRating(this, Math.max(0, round - 1))));
+        for (int i = 0; i < 5; i++) {
+            if (ovPlayerMins[i] != null) {
+                String[] names = {"GK", "DEF", "CM1", "CM2", "ST"};
+                ovPlayerMins[i].setText(names[i] + "\n" + Prefs.getMinRating(this, i));
+                int fill = (i == Math.max(0, round - 1))
+                        ? Color.rgb(78,58,180)
+                        : Color.rgb(15,45,67);
+                ovPlayerMins[i].setBackground(round(fill, Color.rgb(45,73,103), 9));
+            }
+        }
         if (ovRepeat != null) ovRepeat.setText(repeatLabel());
     }
 
@@ -1508,12 +1534,6 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private String currentSlotName() {
         return AuctionEngine.SLOT_NAMES[Math.max(0, Math.min(4, currentRound()-1))];
-    }
-
-    private void changeCurrentMin(int delta) {
-        int slot = Math.max(0, Math.min(4, currentRound()-1));
-        Prefs.setMinRating(this, slot, Prefs.getMinRating(this, slot) + delta);
-        refreshOverlay();
     }
 
     private String repeatLabel() {
