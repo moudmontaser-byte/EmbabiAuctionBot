@@ -463,7 +463,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
-        verifyTurnLabelByOcr();
+        scanUnknownScreenByOcr();
     }
 
     private Integer extractGuiRound(String all) {
@@ -1247,6 +1247,96 @@ public class AuctionAccessibilityService extends AccessibilityService {
             actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
             status("Confirm اتضغط ✓ — أنتظر ثانية ثم «انتظار المزايدة»");
             queueScan(ACTION_DEBOUNCE_MS + 120);
+        });
+    }
+
+    private void scanUnknownScreenByOcr() {
+        if (turnVisualBusy || screenshotBusy || screenReadBusy) return;
+        turnVisualBusy = true;
+
+        captureBitmap(bmp -> {
+            if (bmp == null) {
+                turnVisualBusy = false;
+                status("تعذر قراءة الشاشة — بدون كليك");
+                return;
+            }
+
+            recognizer.process(InputImage.fromBitmap(bmp, 0))
+                    .addOnSuccessListener(tx -> {
+                        turnVisualBusy = false;
+                        String all = normalize(tx.getText());
+
+                        if (isPostMatchScreen(all)) {
+                            bmp.recycle();
+                            postMatchStage = 1;
+                            postMatchSwipeAttempts = 0;
+                            resultWaiting = false;
+                            cancelBidFlow();
+                            mustSeeWaitingBeforeNextBid = false;
+                            status("OCR اكتشف نهاية الجيم ✓ — أبدأ البحث والـScroll");
+                            queueScan(ACTION_DEBOUNCE_MS);
+                            return;
+                        }
+
+                        if (containsAny(all,
+                                "انتظار المزايدة", "انتظار المزايده",
+                                "waiting bid", "waiting for bid")) {
+                            bmp.recycle();
+                            mustSeeWaitingBeforeNextBid = false;
+                            status("OCR: «انتظار المزايدة» = دور الخصم");
+                            readAuctionSnapshot(false);
+                            return;
+                        }
+
+                        if (containsAny(all,
+                                "تأكيد المزايدة", "تاكيد المزايده",
+                                "confirm bid")) {
+                            bmp.recycle();
+
+                            if (awaitingConfirm) {
+                                status("OCR: «تأكيد المزايدة» ✓ — أضغط Confirm");
+                                clickConfirmAndFinalize();
+                            } else if (!mustSeeWaitingBeforeNextBid) {
+                                status("OCR: «تأكيد المزايدة» = دورنا");
+                                readAuctionSnapshot(true);
+                            }
+                            return;
+                        }
+
+                        Rect hit = findOcrTextRect(tx,
+                                "هاتلي منافس", "هات لي منافس", "find opponent");
+                        if (hit != null) {
+                            Rect target = hit;
+                            bmp.recycle();
+                            engine.resetSession();
+                            Prefs.setCurrentRound(AuctionAccessibilityService.this, 1);
+                            status("OCR: لقيت هاتلي منافس ✓");
+                            dispatchTapPx(target.centerX(), target.centerY(),
+                                    () -> queueScan(ACTION_DEBOUNCE_MS + 120),
+                                    () -> status("فشل الضغط على هاتلي منافس"));
+                            return;
+                        }
+
+                        hit = findOcrTextRect(tx,
+                                "العب الآن", "العب الان", "play now");
+                        if (hit != null) {
+                            Rect target = hit;
+                            bmp.recycle();
+                            status("OCR: لقيت العب الآن ✓");
+                            dispatchTapPx(target.centerX(), target.centerY(),
+                                    () -> queueScan(ACTION_DEBOUNCE_MS + 120),
+                                    () -> status("فشل الضغط على العب الآن"));
+                            return;
+                        }
+
+                        bmp.recycle();
+                        status("OCR الشاشة: لا توجد حالة معروفة — بدون كليك");
+                    })
+                    .addOnFailureListener(e -> {
+                        turnVisualBusy = false;
+                        bmp.recycle();
+                        status("OCR الشاشة فشل — بدون كليك");
+                    });
         });
     }
 
