@@ -1,0 +1,21 @@
+name: Inspect HiddenPlayer gesture exact
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/inspect_hidden_gesture.yml'
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print gesture methods
+        shell: bash
+        run: |
+          rm -rf /tmp/legacy && mkdir -p /tmp/legacy
+          unzip -q EmbabiAuctionBot_V0.1_CloudBuild.zip -d /tmp/legacy
+          F=/tmp/legacy/HiddenPlayerBot_v10/app/src/main/java/com/embabi/hiddenplayer/HiddenPlayerAccessibilityService.java
+          echo "==== gesture refs ===="
+          grep -n -E "dispatchGesture|GestureDescription|tap\(|click|performAction|ACTION_CLICK" "$F" | head -160
+          echo "==== surrounding source ===="
+          sed -n '500,820p' "$F"
