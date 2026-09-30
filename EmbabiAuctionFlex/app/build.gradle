@@ -1,0 +1,25 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.embabi.auctionflex'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.embabi.auctionflex"
+        minSdk 30
+        targetSdk 35
+        versionCode 200
+        versionName "20.0-flex-ranges"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'com.google.mlkit:text-recognition:16.0.1'
+}
