@@ -30,7 +30,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private interface BitmapConsumer { void accept(Bitmap bitmap); }
     private interface IntResult { void accept(Integer value); }
 
-    private static final long ACTION_DEBOUNCE_MS = 650L;
+    private static final long ACTION_DEBOUNCE_MS = 1050L;
     private final Handler h = new Handler(Looper.getMainLooper());
     private final TextRecognizer recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
 
@@ -88,7 +88,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private final Runnable monitor = new Runnable() {
         @Override public void run() {
             if (running && !paused) analyzeCurrentScreen();
-            if (running) h.postDelayed(this, 450);
+            if (running) h.postDelayed(this, 650);
         }
     };
 
@@ -154,7 +154,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     @Override public void onAccessibilityEvent(AccessibilityEvent event) {
-        if (running && !paused) queueScan(60);
+        if (running && !paused) queueScan(120);
     }
 
     @Override public void onInterrupt() {}
@@ -785,10 +785,18 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
-        int l = Math.max(0, Math.min(base.getWidth() - 1, Math.round(n.left * base.getWidth())));
-        int t = Math.max(0, Math.min(base.getHeight() - 1, Math.round(n.top * base.getHeight())));
-        int r = Math.max(l + 1, Math.min(base.getWidth(), Math.round(n.right * base.getWidth())));
-        int b = Math.max(t + 1, Math.min(base.getHeight(), Math.round(n.bottom * base.getHeight())));
+        // A tiny padding protects against a calibration box cutting off one digit.
+        float px = n.width() * .04f;
+        float py = n.height() * .08f;
+        float nl = Math.max(0f, n.left - px);
+        float nt = Math.max(0f, n.top - py);
+        float nr = Math.min(1f, n.right + px);
+        float nb = Math.min(1f, n.bottom + py);
+
+        int l = Math.max(0, Math.min(base.getWidth() - 1, Math.round(nl * base.getWidth())));
+        int t = Math.max(0, Math.min(base.getHeight() - 1, Math.round(nt * base.getHeight())));
+        int r = Math.max(l + 1, Math.min(base.getWidth(), Math.round(nr * base.getWidth())));
+        int b = Math.max(t + 1, Math.min(base.getHeight(), Math.round(nb * base.getHeight())));
 
         Bitmap crop;
         try {
@@ -798,16 +806,89 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
-        recognizer.process(InputImage.fromBitmap(crop, 0))
+        int scale = ratingMode ? 4 : 3;
+        Bitmap enlarged;
+        try {
+            enlarged = Bitmap.createScaledBitmap(
+                    crop,
+                    Math.max(1, crop.getWidth() * scale),
+                    Math.max(1, crop.getHeight() * scale),
+                    true
+            );
+        } catch (Exception e) {
+            crop.recycle();
+            cb.accept(null);
+            return;
+        }
+        crop.recycle();
+
+        recognizePrepared(enlarged, ratingMode, cb, true);
+    }
+
+    private void recognizePrepared(Bitmap image, boolean ratingMode, IntResult cb, boolean allowContrastFallback) {
+        recognizer.process(InputImage.fromBitmap(image, 0))
                 .addOnSuccessListener(tx -> {
                     Integer value = ratingMode ? extractRating(tx.getText()) : extractMoney(tx.getText());
-                    crop.recycle();
-                    cb.accept(value);
+
+                    if (value != null || !allowContrastFallback) {
+                        image.recycle();
+                        cb.accept(value);
+                        return;
+                    }
+
+                    Bitmap high = makeHighContrast(image);
+                    image.recycle();
+
+                    if (high == null) {
+                        cb.accept(null);
+                        return;
+                    }
+
+                    recognizer.process(InputImage.fromBitmap(high, 0))
+                            .addOnSuccessListener(tx2 -> {
+                                Integer v2 = ratingMode ? extractRating(tx2.getText()) : extractMoney(tx2.getText());
+                                high.recycle();
+                                cb.accept(v2);
+                            })
+                            .addOnFailureListener(e2 -> {
+                                high.recycle();
+                                cb.accept(null);
+                            });
                 })
                 .addOnFailureListener(e -> {
-                    crop.recycle();
+                    image.recycle();
                     cb.accept(null);
                 });
+    }
+
+    private Bitmap makeHighContrast(Bitmap src) {
+        try {
+            int w = src.getWidth();
+            int hgt = src.getHeight();
+            int[] pixels = new int[w * hgt];
+            src.getPixels(pixels, 0, w, 0, 0, w, hgt);
+
+            long sum = 0;
+            for (int c : pixels) {
+                int y = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000;
+                sum += y;
+            }
+
+            int avg = pixels.length == 0 ? 140 : (int) (sum / pixels.length);
+            int threshold = Math.max(105, Math.min(190, avg + 18));
+
+            for (int i = 0; i < pixels.length; i++) {
+                int c = pixels[i];
+                int y = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000;
+                pixels[i] = y >= threshold ? Color.WHITE : Color.BLACK;
+            }
+
+            Bitmap out = Bitmap.createBitmap(w, hgt, Bitmap.Config.ARGB_8888);
+            out.setPixels(pixels, 0, w, 0, 0, w, hgt);
+            return out;
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private void handleSnapshot(Integer rating, Integer price, Integer mine, Integer opp) {
@@ -1392,112 +1473,112 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(8), dp(6), dp(8), dp(7));
+        box.setPadding(dp(5), dp(4), dp(5), dp(5));
         box.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        box.setBackground(round(Color.argb(244,7,18,32), Color.rgb(84,78,220), 16));
+        box.setBackground(round(Color.argb(226,7,18,32), Color.rgb(91,82,225), 12));
 
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
 
-        TextView title = ovText("◈ AUCTION GENIUS", 12.5f, Color.WHITE, true);
+        TextView title = ovText("◈ AUCTION", 10.5f, Color.WHITE, true);
         title.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
-        TextView collapse = ovText(expanded ? "—" : "☰", 20, Color.rgb(160,186,255), true);
+        TextView collapse = ovText(expanded ? "−" : "☰", 17, Color.rgb(160,186,255), true);
         collapse.setGravity(Gravity.CENTER);
-        TextView close = ovText("×", 22, Color.rgb(255,105,125), true);
+        TextView close = ovText("×", 18, Color.rgb(255,105,125), true);
         close.setGravity(Gravity.CENTER);
 
-        head.addView(title, new LinearLayout.LayoutParams(0, dp(32), 1));
-        head.addView(collapse, new LinearLayout.LayoutParams(dp(36), dp(32)));
-        head.addView(close, new LinearLayout.LayoutParams(dp(36), dp(32)));
+        head.addView(title, new LinearLayout.LayoutParams(0, dp(25), 1));
+        head.addView(collapse, new LinearLayout.LayoutParams(dp(29), dp(25)));
+        head.addView(close, new LinearLayout.LayoutParams(dp(29), dp(25)));
         box.addView(head);
 
         if (expanded) {
-            ovRunState = ovText("", 12, Color.rgb(0,230,150), true);
-            box.addView(ovRunState);
+            ovRunState = ovText("", 8.5f, Color.rgb(0,230,150), true);
+            ovRunState.setMaxLines(1);
+            box.addView(ovRunState, new LinearLayout.LayoutParams(-1, dp(17)));
 
-            ovStatus = ovText(lastStatus, 10, Color.rgb(207,219,239), false);
-            ovStatus.setMaxLines(2);
-            ovStatus.setPadding(0, dp(2), 0, dp(4));
-            box.addView(ovStatus);
+            ovStatus = ovText(lastStatus, 8.5f, Color.rgb(207,219,239), false);
+            ovStatus.setSingleLine(true);
+            ovStatus.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            ovStatus.setPadding(0, 0, 0, dp(2));
+            box.addView(ovStatus, new LinearLayout.LayoutParams(-1, dp(20)));
 
             LinearLayout row1 = new LinearLayout(this);
             row1.setOrientation(LinearLayout.HORIZONTAL);
             ovRound = chip("R" + currentRound() + "/5", Color.rgb(15,45,67));
             ovRating = chip("OVR " + show(lastRating), Color.rgb(15,45,67));
-            ovPrice = chip("Price " + show(lastPrice) + "M", Color.rgb(15,45,67));
-            row1.addView(ovRound, new LinearLayout.LayoutParams(0, dp(31), 1));
-            addGap(row1, 5);
-            row1.addView(ovRating, new LinearLayout.LayoutParams(0, dp(31), 1));
-            addGap(row1, 5);
-            row1.addView(ovPrice, new LinearLayout.LayoutParams(0, dp(31), 1));
+            ovPrice = chip(show(lastPrice) + "M", Color.rgb(15,45,67));
+            row1.addView(ovRound, new LinearLayout.LayoutParams(0, dp(26), 1));
+            addGap(row1, 3);
+            row1.addView(ovRating, new LinearLayout.LayoutParams(0, dp(26), 1));
+            addGap(row1, 3);
+            row1.addView(ovPrice, new LinearLayout.LayoutParams(0, dp(26), 1));
             box.addView(row1);
 
             LinearLayout row2 = new LinearLayout(this);
             row2.setOrientation(LinearLayout.HORIZONTAL);
-            ovBudgets = chip("You " + show(lastMine) + "M • Opp " + show(lastOpp) + "M", Color.rgb(15,45,67));
+            row2.setPadding(0, dp(3), 0, 0);
+            ovBudgets = chip("Y" + show(lastMine) + " • O" + show(lastOpp), Color.rgb(15,45,67));
             ovDecision = chip(lastDecision, Color.rgb(15,45,67));
-            row2.setPadding(0, dp(5), 0, 0);
-            row2.addView(ovBudgets, new LinearLayout.LayoutParams(0, dp(31), 2));
-            addGap(row2, 5);
-            row2.addView(ovDecision, new LinearLayout.LayoutParams(0, dp(31), 1));
+            row2.addView(ovBudgets, new LinearLayout.LayoutParams(0, dp(26), 2));
+            addGap(row2, 3);
+            row2.addView(ovDecision, new LinearLayout.LayoutParams(0, dp(26), 1));
             box.addView(row2);
-
-            LinearLayout controls = new LinearLayout(this);
-            controls.setOrientation(LinearLayout.HORIZONTAL);
-            controls.setPadding(0, dp(7), 0, 0);
-            Button start = ovButton("▶ START", Color.rgb(0,191,120));
-            Button pause = ovButton("Ⅱ PAUSE", Color.rgb(26,55,82));
-            Button stop = ovButton("■ STOP", Color.rgb(105,24,42));
-            start.setOnClickListener(v -> startBot(true));
-            pause.setOnClickListener(v -> togglePause());
-            stop.setOnClickListener(v -> stopBot("تم إيقاف البوت يدويًا"));
-            controls.addView(start, new LinearLayout.LayoutParams(0, dp(37), 1));
-            addGap(controls, 5);
-            controls.addView(pause, new LinearLayout.LayoutParams(0, dp(37), 1));
-            addGap(controls, 5);
-            controls.addView(stop, new LinearLayout.LayoutParams(0, dp(37), 1));
-            box.addView(controls);
-
-            TextView limitsTitle = ovText("MIN RATINGS", 9.5f, Color.rgb(166,185,210), true);
-            limitsTitle.setPadding(0, dp(5), 0, dp(2));
-            box.addView(limitsTitle);
 
             LinearLayout players = new LinearLayout(this);
             players.setOrientation(LinearLayout.HORIZONTAL);
-            String[] pNames = {"GK", "DEF", "CM1", "CM2", "ST"};
+            players.setPadding(0, dp(4), 0, 0);
+            String[] pNames = {"GK", "DEF", "C1", "C2", "ST"};
             int activeSlot = Math.max(0, Math.min(4, currentRound() - 1));
+
             for (int i = 0; i < 5; i++) {
                 String text = pNames[i] + "\n" + Prefs.getMinRating(this, i);
                 int fill = i == activeSlot ? Color.rgb(78,58,180) : Color.rgb(15,45,67);
                 TextView p = chip(text, fill);
-                p.setTextSize(9.5f);
+                p.setTextSize(8.2f);
                 p.setGravity(Gravity.CENTER);
                 ovPlayerMins[i] = p;
-                players.addView(p, new LinearLayout.LayoutParams(0, dp(37), 1));
-                if (i < 4) addGap(players, 3);
+                players.addView(p, new LinearLayout.LayoutParams(0, dp(31), 1));
+                if (i < 4) addGap(players, 2);
             }
             box.addView(players);
 
-            LinearLayout tools = new LinearLayout(this);
-            tools.setOrientation(LinearLayout.HORIZONTAL);
-            tools.setPadding(0, dp(7), 0, 0);
-            Button cal = ovButton("▣ CAL", Color.rgb(25,133,220));
-            Button test = ovButton("◎ TEST OCR", Color.rgb(34,58,86));
+            LinearLayout controls = new LinearLayout(this);
+            controls.setOrientation(LinearLayout.HORIZONTAL);
+            controls.setPadding(0, dp(4), 0, 0);
+
+            Button start = ovButton("▶", Color.rgb(0,191,120));
+            Button pause = ovButton("Ⅱ", Color.rgb(26,55,82));
+            Button stop = ovButton("■", Color.rgb(105,24,42));
+            Button cal = ovButton("CAL", Color.rgb(25,133,220));
+            Button test = ovButton("OCR", Color.rgb(34,58,86));
+
+            start.setOnClickListener(v -> startBot(true));
+            pause.setOnClickListener(v -> togglePause());
+            stop.setOnClickListener(v -> stopBot("تم إيقاف البوت يدويًا"));
             cal.setOnClickListener(v -> startCalibration());
             test.setOnClickListener(v -> testOcr());
-            tools.addView(cal, new LinearLayout.LayoutParams(0, dp(37), 1));
-            addGap(tools, 5);
-            tools.addView(test, new LinearLayout.LayoutParams(0, dp(37), 1));
-            box.addView(tools);
 
-            ovRepeat = ovText(repeatLabel(), 11, Color.rgb(166,185,210), true);
-            ovRepeat.setPadding(0, dp(6), 0, 0);
-            box.addView(ovRepeat);
+            controls.addView(start, new LinearLayout.LayoutParams(0, dp(29), 1));
+            addGap(controls, 2);
+            controls.addView(pause, new LinearLayout.LayoutParams(0, dp(29), 1));
+            addGap(controls, 2);
+            controls.addView(stop, new LinearLayout.LayoutParams(0, dp(29), 1));
+            addGap(controls, 2);
+            controls.addView(cal, new LinearLayout.LayoutParams(0, dp(29), 1));
+            addGap(controls, 2);
+            controls.addView(test, new LinearLayout.LayoutParams(0, dp(29), 1));
+            box.addView(controls);
+
+            ovRepeat = ovText(repeatLabel(), 8.2f, Color.rgb(166,185,210), true);
+            ovRepeat.setGravity(Gravity.CENTER);
+            box.addView(ovRepeat, new LinearLayout.LayoutParams(-1, dp(16)));
         } else {
-            ovStatus = ovText(shortStatus(), 11, Color.rgb(205,219,241), true);
+            ovStatus = ovText(shortStatus(), 9.5f, Color.rgb(205,219,241), true);
             ovStatus.setGravity(Gravity.CENTER);
-            box.addView(ovStatus, new LinearLayout.LayoutParams(-1, dp(34)));
+            ovStatus.setSingleLine(true);
+            box.addView(ovStatus, new LinearLayout.LayoutParams(-1, dp(25)));
         }
 
         collapse.setOnClickListener(v -> showFloatingOverlay(!overlayExpanded));
@@ -1509,18 +1590,20 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         floatingView = box;
         floatingLp = new WindowManager.LayoutParams(
-                dp(296), -2,
+                dp(218), -2,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
                         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT);
+
         floatingLp.gravity = Gravity.TOP | Gravity.START;
-        floatingLp.x = dp(8);
-        floatingLp.y = dp(82);
+        floatingLp.x = dp(4);
+        floatingLp.y = dp(68);
 
         final float[] touch = new float[4];
         title.setOnTouchListener((v, e) -> {
             if (floatingLp == null || floatingView == null) return false;
+
             if (e.getAction() == MotionEvent.ACTION_DOWN) {
                 touch[0] = e.getRawX();
                 touch[1] = e.getRawY();
@@ -1528,12 +1611,17 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 touch[3] = floatingLp.y;
                 return true;
             }
+
             if (e.getAction() == MotionEvent.ACTION_MOVE) {
                 floatingLp.x = Math.round(touch[2] + e.getRawX() - touch[0]);
                 floatingLp.y = Math.round(touch[3] + e.getRawY() - touch[1]);
-                try { wm.updateViewLayout(floatingView, floatingLp); } catch (Exception ignored) {}
+
+                try {
+                    wm.updateViewLayout(floatingView, floatingLp);
+                } catch (Exception ignored) {}
                 return true;
             }
+
             return true;
         });
 
@@ -1557,7 +1645,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private void refreshOverlay() {
         int round = currentRound();
         if (ovRunState != null) {
-            ovRunState.setText(!running ? "● STOPPED" : paused ? "● PAUSED" : "● RUNNING");
+            ovRunState.setText((!running ? "● STOP" : paused ? "● PAUSE" : "● RUN") +
+                    " • " + repeatLabel() +
+                    " • G" + matchesCompleted);
             ovRunState.setTextColor(!running ? Color.rgb(255,105,125) :
                     paused ? Color.rgb(255,190,80) : Color.rgb(0,230,150));
         }
@@ -1798,12 +1888,13 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private boolean clickNode(AccessibilityNodeInfo n) {
         if (n == null) return false;
+        if (System.currentTimeMillis() < actionCooldownUntil) return false;
         AccessibilityNodeInfo cur = n;
         for (int i = 0; i < 7 && cur != null; i++, cur = cur.getParent()) {
             if (cur.isClickable() && cur.isEnabled()) {
                 try {
+                    actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
                     if (cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                        actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
                         return true;
                     }
                 } catch (Exception ignored) {}
@@ -1845,6 +1936,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void swipePageDown() {
+        if (System.currentTimeMillis() < actionCooldownUntil) return;
+        actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
         int w = getResources().getDisplayMetrics().widthPixels;
         int hh = getResources().getDisplayMetrics().heightPixels;
         float x = .88f * w, sy = .86f * hh, ey = .24f * hh;
@@ -1888,6 +1981,11 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void dispatchTapPx(float x, float y, Runnable completed, Runnable cancelled) {
+        if (System.currentTimeMillis() < actionCooldownUntil) {
+            if (cancelled != null) h.post(cancelled);
+            return;
+        }
+        actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
         Path p = new Path();
         p.moveTo(x, y);
         p.lineTo(x + .5f, y + .5f);
