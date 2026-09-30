@@ -115,17 +115,19 @@ public final class Prefs {
         RectF saved = getRegion(c, key);
         if (saved != null) return saved;
 
+        // Tight defaults measured from the user's current 9:16 auction layout.
+        // Hidden Player succeeded because it OCR'd small regions, not huge screen zones.
         if ("rating".equals(key)) {
-            return new RectF(.10f, .28f, .43f, .60f);
+            return new RectF(.205f, .345f, .355f, .500f);
         }
         if ("price".equals(key)) {
-            return new RectF(.28f, .70f, .72f, .88f);
+            return new RectF(.405f, .775f, .595f, .842f);
         }
         if ("mine".equals(key)) {
-            return new RectF(.06f, .135f, .46f, .285f);
+            return new RectF(.255f, .155f, .430f, .220f);
         }
         if ("opponent".equals(key)) {
-            return new RectF(.54f, .135f, .94f, .285f);
+            return new RectF(.570f, .155f, .745f, .220f);
         }
         return null;
     }
