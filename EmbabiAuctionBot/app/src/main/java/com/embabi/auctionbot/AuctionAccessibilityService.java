@@ -1197,10 +1197,10 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 };
             }
 
-            ocrRect(bmp, Prefs.getRegionOrDefault(this, "rating"), true, sinks[0]);
-            ocrRect(bmp, Prefs.getRegionOrDefault(this, "price"), false, sinks[1]);
-            ocrRect(bmp, Prefs.getRegionOrDefault(this, "mine"), false, sinks[2]);
-            ocrRect(bmp, Prefs.getRegionOrDefault(this, "opponent"), false, sinks[3]);
+            ocrRect(bmp, Prefs.getRegion(this, "rating"), true, sinks[0]);
+            ocrRect(bmp, Prefs.getRegion(this, "price"), false, sinks[1]);
+            ocrRect(bmp, Prefs.getRegion(this, "mine"), false, sinks[2]);
+            ocrRect(bmp, Prefs.getRegion(this, "opponent"), false, sinks[3]);
         });
     }
 
