@@ -401,10 +401,10 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 return;
             }
 
-            if (containsAny(all, "العب الان", "العب الآن", "play now") &&
+            if (containsAny(all, "العب الان", "العب الآن", "العب ماتش مع امبابي", "العب ماتش مع إمبابي", "play now") &&
                     !containsAny(all, "تأكيد المزايدة", "تاكيد المزايده", "انتظار المزايدة")) {
                 status("الصفحة الرئيسية ✓ — أضغط «العب الآن»");
-                clickTextAny(root, "العب الان", "العب الآن", "play now");
+                clickTextAny(root, "العب الان", "العب الآن", "العب ماتش مع امبابي", "العب ماتش مع إمبابي", "play now");
                 return;
             }
         }
@@ -590,7 +590,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 "الاهداف والكروت", "الأهداف والكروت",
                 "عرض التشكيلات", "عرض النتائج",
                 "مشاهده التشكيلات", "مشاهدة التشكيلات",
-                "view lineups", "view results", "match summary");
+                "view lineups", "view results", "match summary",
+                "خسارة", "فوز", "خرجت من المباراة", "فاز خصمك بالانسحاب",
+                "العودة للرئيسية", "العوده للرئيسيه");
     }
 
     private boolean isGamesHub(String all) {
@@ -901,7 +903,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         Prefs.setCurrentRound(this, 1);
         postMatchStage = 0;
         status("الرئيسية جاهزة ✓ — أبدأ لوب مزاد جديدة");
-        if (clickTextAny(root, "العب الان", "العب الآن", "play now")) {
+        if (clickTextAny(root, "العب الان", "العب الآن", "العب ماتش مع امبابي", "العب ماتش مع إمبابي", "play now")) {
             actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
             queueScan(ACTION_DEBOUNCE_MS + 120);
         }
@@ -1056,13 +1058,6 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private void readAuctionSnapshot(boolean allowAction) {
         if (screenReadBusy || bidFlowInProgress) return;
-
-        if (!Prefs.isCalibrated(this)) {
-            paused = true;
-            Prefs.setBotPaused(this, true);
-            status("المعايرة ناقصة — اعمل CAL مرة واحدة");
-            return;
-        }
 
         AccessibilityNodeInfo root = getRootInActiveWindow();
         String rawTree = root == null ? "" : collectText(root);
@@ -1665,11 +1660,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         PointF raw = Prefs.getTapPointPx(this, "confirm", bounds.width(), bounds.height());
         PointF norm = Prefs.getPoint(this, "confirm");
-
-        if (raw == null && norm == null) {
-            status("مكان Confirm مش محفوظ — اعمل CAL");
-            return;
-        }
+        PointF fallbackConfirm = defaultTapPoint("confirm", bounds);
 
         turnVisualBusy = true;
 
@@ -1687,9 +1678,16 @@ public class AuctionAccessibilityService extends AccessibilityService {
             if (raw != null) {
                 cx = Math.round(raw.x);
                 cy = Math.round(raw.y);
-            } else {
+            } else if (norm != null) {
                 cx = Math.round(norm.x * bmp.getWidth());
                 cy = Math.round(norm.y * bmp.getHeight());
+            } else {
+                cx = fallbackConfirm == null
+                        ? Math.round(bmp.getWidth() * .292f)
+                        : Math.round(fallbackConfirm.x);
+                cy = fallbackConfirm == null
+                        ? Math.round(bmp.getHeight() * .900f)
+                        : Math.round(fallbackConfirm.y);
             }
 
             cx = Math.max(0, Math.min(bmp.getWidth() - 1, cx));
@@ -2600,6 +2598,29 @@ public class AuctionAccessibilityService extends AccessibilityService {
         try { wm.updateViewLayout(floatingView, floatingLp); } catch (Exception ignored) {}
     }
 
+    private PointF defaultTapPoint(String key, Rect bounds) {
+        if (bounds == null) return null;
+        float nx;
+        float ny;
+
+        // Defaults measured from the user's actual Embabi auction layout.
+        // CAL, when present, always overrides these.
+        if ("plus".equals(key)) {
+            nx = .872f; ny = .818f;
+        } else if ("confirm".equals(key)) {
+            nx = .292f; ny = .900f;
+        } else if ("skip".equals(key)) {
+            nx = .760f; ny = .900f;
+        } else {
+            return null;
+        }
+
+        return new PointF(
+                bounds.left + nx * bounds.width(),
+                bounds.top + ny * bounds.height()
+        );
+    }
+
     private void tapSavedPoint(String key, Callback cb) {
         Rect bounds = Build.VERSION.SDK_INT >= 30
                 ? wm.getMaximumWindowMetrics().getBounds()
@@ -2618,17 +2639,26 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
 
         PointF p = Prefs.getPoint(this, key);
-        if (p == null) {
+        PointF target;
+
+        if (p != null) {
+            target = new PointF(
+                    bounds.left + p.x * bounds.width(),
+                    bounds.top + p.y * bounds.height()
+            );
+        } else {
+            target = defaultTapPoint(key, bounds);
+        }
+
+        if (target == null) {
             cb.onDone(false);
             return;
         }
 
-        float tx = bounds.left + p.x * bounds.width();
-        float ty = bounds.top + p.y * bounds.height();
-        moveOverlayAwayFromPoint(tx, ty);
+        moveOverlayAwayFromPoint(target.x, target.y);
         dispatchTapPx(
-                tx,
-                ty,
+                target.x,
+                target.y,
                 () -> cb.onDone(true),
                 () -> cb.onDone(false));
     }
