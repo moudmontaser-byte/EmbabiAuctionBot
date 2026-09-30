@@ -1,0 +1,21 @@
+name: Inspect HiddenPlayer simulation flow
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/inspect_hidden_sim.yml'
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print simulation flow
+        shell: bash
+        run: |
+          rm -rf /tmp/legacy && mkdir -p /tmp/legacy
+          unzip -q EmbabiAuctionBot_V0.1_CloudBuild.zip -d /tmp/legacy
+          F=/tmp/legacy/HiddenPlayerBot_v10/app/src/main/java/com/embabi/hiddenplayer/HiddenPlayerAccessibilityService.java
+          echo "==== simulation grep ===="
+          grep -n -E "محاك|simulation|simulate|بدء|ابدأ" "$F" || true
+          echo "==== main state machine ===="
+          sed -n '175,345p' "$F"
