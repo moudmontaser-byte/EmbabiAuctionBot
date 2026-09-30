@@ -8,6 +8,16 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
+/**
+ * Five-auction decision engine.
+ *
+ * Design goals:
+ * 1) Build the strongest five-player team possible with a hard 100M budget.
+ * 2) Treat money as a dynamic resource across sequential auctions, not as five isolated bids.
+ * 3) Learn the opponent's observable bidding behaviour inside the current match.
+ * 4) Use cheap "probe" bids on only safe, medium-value cards to learn willingness-to-pay.
+ * 5) Never diagnose a person. The profiler classifies bidding behaviour only.
+ */
 public class AuctionEngine {
     public static final String[] SLOT_NAMES = {"GK", "DEF", "CM1", "CM2", "ST"};
 
@@ -83,14 +93,17 @@ public class AuctionEngine {
     private int pendingVerifyFrames = 0;
     private long ownConfirmAt = 0L;
 
+    // A single cheap probe per safe round. The point is information, not gambling.
+    private final boolean[] probeUsed = new boolean[5];
+    private boolean pendingBidWasProbe = false;
+    private boolean lastOpponentReplyWasToProbe = false;
+
     public AuctionEngine(Context context) {
         this.context = context.getApplicationContext();
     }
 
     public int getRound() { return round; }
 
-    // Screen-driven transition used by the v3 Accessibility bot.
-    // Called only after a result screen disappears and a new live auction screen is positively recognized.
     public void advanceRoundFromScreen() {
         if (complete) return;
         if (round < 5) round++;
@@ -98,6 +111,7 @@ public class AuctionEngine {
             complete = true;
             return;
         }
+
         lastPrice = -1;
         lastRating = -1;
         lastMyBudget = -1;
@@ -109,7 +123,11 @@ public class AuctionEngine {
         pendingBasePrice = -1;
         pendingVerifyFrames = 0;
         ownConfirmAt = 0L;
+        pendingBidWasProbe = false;
+        lastOpponentReplyWasToProbe = false;
+        profiler.startRound(round);
     }
+
     public boolean isPendingOwnBid() { return pendingOwnBid; }
     public boolean isComplete() { return complete; }
     public OpponentProfiler getProfiler() { return profiler; }
@@ -128,7 +146,13 @@ public class AuctionEngine {
         pendingBasePrice = -1;
         pendingVerifyFrames = 0;
         ownConfirmAt = 0L;
+        pendingBidWasProbe = false;
+        lastOpponentReplyWasToProbe = false;
+
+        for (int i = 0; i < probeUsed.length; i++) probeUsed[i] = false;
+
         profiler.reset();
+        profiler.startRound(1);
     }
 
     public void onUnverifiedFrame() {
@@ -153,6 +177,7 @@ public class AuctionEngine {
         pendingOwnBid = false;
         pendingBasePrice = -1;
         pendingVerifyFrames = 0;
+        pendingBidWasProbe = false;
     }
 
     public Decision onStableSnapshot(Snapshot s) {
@@ -169,6 +194,7 @@ public class AuctionEngine {
             }
         }
 
+        // Back-up transition detection. The Accessibility layer is the primary source of round changes.
         boolean newRound = false;
         if (transitionCandidate && lastPrice >= 0) {
             boolean resetPrice = s.price <= 5 && s.price < lastPrice;
@@ -179,6 +205,7 @@ public class AuctionEngine {
                 if (round < 5) {
                     round++;
                     newRound = true;
+                    profiler.startRound(round);
                 } else {
                     complete = true;
                 }
@@ -197,22 +224,36 @@ public class AuctionEngine {
             pendingOwnBid = false;
             pendingVerifyFrames = 0;
             ownConfirmAt = 0L;
+            pendingBidWasProbe = false;
+            lastOpponentReplyWasToProbe = false;
             lastPrice = -1;
         }
 
+        // Learn from price movement.
         if (lastPrice >= 0 && s.price > lastPrice) {
             int delta = s.price - lastPrice;
 
             if (pendingOwnBid && s.price >= pendingBasePrice + 1) {
+                // Our +1 was accepted by the game.
                 pendingOwnBid = false;
                 pendingVerifyFrames = 0;
                 weLead = true;
             } else {
                 long responseMs =
                         ownConfirmAt > 0 ? SystemClock.elapsedRealtime() - ownConfirmAt : -1L;
-                profiler.recordOpponentBid(delta, s.price, responseMs);
+
+                lastOpponentReplyWasToProbe = pendingBidWasProbe;
+                profiler.recordOpponentBid(
+                        delta,
+                        s.price,
+                        responseMs,
+                        s.oppBudget,
+                        lastOpponentReplyWasToProbe
+                );
+
                 pendingOwnBid = false;
                 pendingVerifyFrames = 0;
+                pendingBidWasProbe = false;
                 weLead = false;
             }
         } else if (pendingOwnBid && s.price == pendingBasePrice) {
@@ -220,6 +261,7 @@ public class AuctionEngine {
             if (pendingVerifyFrames >= 8) {
                 pendingOwnBid = false;
                 pendingVerifyFrames = 0;
+                pendingBidWasProbe = false;
                 remember(s);
                 return make(Action.SAFETY_PAUSE, 0, 0,
                         "Bid was not verified on screen");
@@ -239,67 +281,129 @@ public class AuctionEngine {
         int slot = Math.max(0, Math.min(4, round - 1));
         int min = Prefs.getMinRating(context, slot);
 
+        // User's hard rule: below minimum = normally let the opponent take it and use free fallback.
         if (s.rating < min) {
             return make(Action.PASS, 0, 0,
-                    "OVR " + s.rating + " is below your minimum " + min +
-                    " - prefer the free fallback");
+                    "OVR " + s.rating + " < min " + min +
+                    " - keep money and prefer the free fallback");
         }
 
         int[] caps = computeCaps(s, slot);
         int soft = caps[0];
         int hard = caps[1];
 
+        // You never need more than opponent's entire remaining budget + 1M to beat them.
+        int strategicCeiling = Math.min(hard, Math.max(0, s.oppBudget + 1));
+        hard = Math.min(hard, strategicCeiling);
+
         if (s.price + 1 > hard) {
             return make(Action.PASS, soft, hard,
-                    "Hard cap reached - protect the five-player plan");
+                    "Hard cap reached - protect the 100M five-player plan");
         }
 
         boolean star = s.rating >= 89;
+        boolean elite = s.rating >= 91;
         boolean finalStriker = slot == 4 && s.rating >= 88;
 
+        // Last player: unused money has no future value.
         if (finalStriker) {
             return make(Action.BID, soft, hard,
-                    "Final ST 88+ - use the money, do not hoard it");
+                    "FINAL ST 88+ - spend remaining budget intelligently");
+        }
+
+        // Elite/star player: intentionally much more stubborn, but still not irrational.
+        if (elite) {
+            return make(Action.BID, soft, hard,
+                    "ELITE 91+ - fight hard; future reserve is already protected");
         }
 
         if (star) {
             return make(Action.BID, soft, hard,
-                    "STAR MODE 89+ - aggressive while future budget stays protected");
+                    "STAR 89+ - keep +1 pressure inside the protected team budget");
+        }
+
+        // Cheap information probe on a medium card.
+        if (shouldProbe(s, slot, min, soft, hard)) {
+            probeUsed[slot] = true;
+            pendingBidWasProbe = true;
+            return make(Action.BID, soft, hard,
+                    "PROBE +1 - cheap test of opponent willingness, safe if we win cheaply");
+        }
+
+        // If a probe made the opponent instantly jump, do not chase a merely average card.
+        if (lastOpponentReplyWasToProbe &&
+                profiler.lastResponseWasStrong() &&
+                s.rating <= min + 2 &&
+                s.price >= Math.max(4, soft - 2)) {
+            lastOpponentReplyWasToProbe = false;
+            return make(Action.PASS, soft, hard,
+                    "Probe exposed strong interest - let opponent burn budget on a medium card");
         }
 
         if (s.price + 1 <= soft) {
-            return make(Action.BID, soft, hard, "Price is good value");
+            return make(Action.BID, soft, hard,
+                    "Good value - +1 keeps information and avoids overpaying");
         }
 
-        String style = profiler.style();
+        String coarse = profiler.style();
+        String type = profiler.archetype();
 
+        // Slowdown after several fast counters is useful evidence that we are near the opponent's comfort edge.
         if (profiler.isHesitating() && s.price + 1 <= hard) {
             return make(Action.BID, soft, hard,
-                    "Opponent response slowed - pressure with +1");
+                    type + " is slowing down - controlled +1 pressure");
         }
 
-        if ("CAUTIOUS".equals(style) && s.price + 1 <= hard) {
+        if ("CAUTIOUS".equals(coarse) && s.price + 1 <= hard) {
             return make(Action.BID, soft, hard,
-                    "Cautious opponent - keep +1 pressure");
+                    type + " - keep +1 pressure, never gift them a large jump");
         }
 
-        if ("AGGRESSIVE".equals(style)) {
-            int pressureLimit = Math.min(hard, soft + (s.rating >= 88 ? 3 : 1));
+        // Repeated chasers/jumpers are useful to us on medium cards: make them spend, then stop.
+        if ("AGGRESSIVE".equals(coarse)) {
+            int margin = s.rating >= 88 ? 4 : 1;
+            int pressureLimit = Math.min(hard, soft + margin);
+
+            if (profiler.isChaser() && s.rating <= min + 2) {
+                pressureLimit = Math.min(pressureLimit, soft);
+            }
+
             if (s.price + 1 <= pressureLimit) {
                 return make(Action.BID, soft, hard,
-                        "Controlled pressure - make aggressive opponent spend");
+                        type + " - controlled +1 pressure; make them pay");
             }
+
             return make(Action.PASS, soft, hard,
-                    "Aggressive opponent is overpaying - let them burn budget");
+                    type + " is overpaying - let them deplete their budget");
         }
 
-        int balancedLimit = Math.min(hard, soft + 2);
+        // If opponent has already spent much more than us, preserve the advantage unless the card is strong.
+        int budgetEdge = s.myBudget - s.oppBudget;
+        if (budgetEdge >= 18 && s.rating <= min + 2 && s.price >= soft) {
+            return make(Action.PASS, soft, hard,
+                    "We already own a strong budget edge - no need to chase a marginal card");
+        }
+
+        int balancedLimit = Math.min(hard, soft + (s.rating >= 88 ? 3 : 2));
         if (s.price + 1 <= balancedLimit) {
-            return make(Action.BID, soft, hard, "Balanced +1 pressure");
+            return make(Action.BID, soft, hard,
+                    type + " - balanced +1 pressure");
         }
 
         return make(Action.PASS, soft, hard,
-                "Value exhausted - save money for stronger remaining players");
+                "Value exhausted - save money for a stronger remaining player");
+    }
+
+    private boolean shouldProbe(Snapshot s, int slot, int min, int soft, int hard) {
+        if (slot <= 0 || slot >= 4) return false;      // not GK, not final ST
+        if (probeUsed[slot]) return false;
+        if (s.rating < min || s.rating > min + 2) return false;
+        if (s.price > 4) return false;
+        if (s.price + 1 > Math.min(hard, Math.max(4, soft / 2))) return false;
+        if (s.myBudget < 45) return false;
+
+        // Probe is most valuable while we are still learning this opponent.
+        return profiler.confidence() < 72;
     }
 
     private void remember(Snapshot s) {
@@ -322,71 +426,115 @@ public class AuctionEngine {
                 hard,
                 Prefs.getMinRating(context, slot),
                 reason,
-                profiler.style(),
+                profiler.archetype(),
                 profiler.confidence(),
                 profiler.estimatedCeiling()
         );
     }
 
     private int[] computeCaps(Snapshot s, int slot) {
-        double base = fairValue(s.rating) * positionMultiplier(slot);
-        double urgency = new double[]{0.76, 0.93, 1.00, 1.06, 1.20}[slot];
-        double soft = base * urgency;
+        int min = Prefs.getMinRating(context, slot);
 
-        int reserve = reserveForFuture(slot);
+        double base = fairValue(s.rating) * positionMultiplier(slot);
+        double qualityAboveMinimum = Math.max(0, s.rating - min);
+
+        // Marginal cards get less budget. True upgrades get progressively more.
+        double qualityFactor;
+        if (qualityAboveMinimum == 0) qualityFactor = .78;
+        else if (qualityAboveMinimum == 1) qualityFactor = .88;
+        else if (qualityAboveMinimum == 2) qualityFactor = .98;
+        else if (qualityAboveMinimum == 3) qualityFactor = 1.08;
+        else qualityFactor = 1.16;
+
+        double urgency = new double[]{0.70, 0.92, 1.00, 1.06, 1.22}[slot];
+        double soft = base * urgency * qualityFactor;
+
+        int reserve = reserveForFuture(slot, s.myBudget);
         int maxAffordable = Math.max(0, s.myBudget - reserve);
 
-        double boost = 1.0;
-        if (s.rating == 89) boost = 1.20;
-        else if (s.rating == 90) boost = 1.30;
-        else if (s.rating >= 91) boost = 1.42;
+        double starBoost = 1.0;
+        if (s.rating == 89) starBoost = 1.22;
+        else if (s.rating == 90) starBoost = 1.34;
+        else if (s.rating == 91) starBoost = 1.48;
+        else if (s.rating == 92) starBoost = 1.58;
+        else if (s.rating >= 93) starBoost = 1.68;
 
-        double desiredHard = soft * boost + 2.0;
+        double desiredHard = soft * starBoost + 2.0;
 
-        // GK is usually good in this game. Do not burn early budget.
+        // GK usually has acceptable quality; preserve ammunition for DEF/CM/ST.
         if (slot == 0) {
-            double gkLimit = Math.max(9.0, s.myBudget * (s.rating >= 90 ? 0.23 : 0.18));
-            desiredHard = Math.min(desiredHard, gkLimit);
+            double gkShare;
+            if (s.rating >= 91) gkShare = .25;
+            else if (s.rating >= 89) gkShare = .21;
+            else gkShare = .16;
+
+            desiredHard = Math.min(desiredHard, Math.max(8.0, s.myBudget * gkShare));
         }
 
-        // Last player is the striker. If he is 88+, remaining money is ammunition.
+        // Final striker: no future reserve. If 88+, remaining money is useful now, not later.
         if (slot == 4) {
             if (s.rating >= 88) {
                 desiredHard = s.myBudget;
-                soft = Math.max(soft, Math.min(s.myBudget, base * 1.15));
+                soft = Math.max(soft, Math.min(s.myBudget, base * 1.18));
             } else {
-                desiredHard = Math.min(s.myBudget, Math.max(desiredHard, base * 1.10));
+                desiredHard = Math.min(s.myBudget, Math.max(desiredHard, base * 1.05));
             }
         }
 
         String style = profiler.style();
-        if ("CAUTIOUS".equals(style)) desiredHard += 2.0;
-        if ("AGGRESSIVE".equals(style) && s.rating < 89 && slot != 4) desiredHard -= 2.0;
-        if (profiler.isHesitating()) desiredHard += 1.0;
 
-        if (s.oppBudget <= 15 && s.myBudget > s.oppBudget) desiredHard += 2.0;
+        if ("CAUTIOUS".equals(style)) desiredHard += 2.0;
+
+        if ("AGGRESSIVE".equals(style) && s.rating < 89 && slot != 4) {
+            desiredHard -= profiler.isChaser() ? 3.0 : 1.5;
+        }
+
+        if (profiler.isHesitating()) desiredHard += 1.5;
+
+        // A budget-depleted opponent can often be beaten cheaply.
+        if (s.oppBudget <= 18 && s.myBudget > s.oppBudget) {
+            desiredHard = Math.min(desiredHard + 2.0, s.oppBudget + 1.0);
+        }
+
+        // Never set a rational hard ceiling above what is necessary to beat the other full budget.
+        desiredHard = Math.min(desiredHard, s.oppBudget + 1.0);
 
         int hard = slot == 4 && s.rating >= 88
-                ? s.myBudget
+                ? Math.min(s.myBudget, s.oppBudget + 1)
                 : Math.max(0, Math.min(maxAffordable, (int) Math.floor(desiredHard)));
 
         int softInt = Math.max(0, Math.min(hard, (int) Math.floor(soft)));
         return new int[]{softInt, hard};
     }
 
-    private int reserveForFuture(int currentSlot) {
+    private int reserveForFuture(int currentSlot, int currentBudget) {
+        if (currentSlot >= 4) return 0;
+
         double reserve = 0.0;
+
         for (int i = currentSlot + 1; i < 5; i++) {
             int threshold = Prefs.getMinRating(context, i);
-            double expected = fairValue(threshold) * positionMultiplier(i) * 0.90;
-            if (i == 4) expected = Math.max(expected, 14.0);
-            reserve += expected;
+            double target = fairValue(threshold) * positionMultiplier(i);
+
+            // We do not reserve the whole theoretical value because losing can still give a free player.
+            double reserveFactor = .70;
+
+            // But reserve serious money for the final striker.
+            if (i == 4) reserveFactor = .82;
+
+            // CM2 and ST deserve slightly more late-game flexibility.
+            if (i == 3) reserveFactor = .74;
+
+            reserve += target * reserveFactor;
         }
-        return (int) Math.ceil(reserve);
+
+        // Never reserve so much that a true star in the current slot becomes impossible.
+        int ceiling = Math.max(0, currentBudget - 5);
+        return Math.min(ceiling, (int) Math.ceil(reserve));
     }
 
     private double positionMultiplier(int slot) {
-        return new double[]{0.72, 0.95, 1.00, 1.03, 1.15}
+        return new double[]{0.70, 0.95, 1.00, 1.04, 1.18}
                 [Math.max(0, Math.min(4, slot))];
     }
 
@@ -409,34 +557,94 @@ public class AuctionEngine {
         }
     }
 
+    /**
+     * Observable bidding-behaviour model.
+     *
+     * These labels are strategy archetypes, not psychological diagnoses.
+     * It learns from increment sizes, counter frequency, response speed,
+     * slowdown near higher prices, and reaction to cheap probe bids.
+     */
     public static class OpponentProfiler {
         private final List<Integer> deltas = new ArrayList<>();
         private final List<Integer> prices = new ArrayList<>();
         private final List<Long> responses = new ArrayList<>();
+        private final List<Integer> budgets = new ArrayList<>();
+
+        private int currentRound = 1;
+        private int countersThisRound = 0;
+        private int maxCountersInRound = 0;
+        private int quickCounters = 0;
+        private int probeReplies = 0;
+        private int strongProbeReplies = 0;
+        private boolean lastStrongResponse = false;
 
         void reset() {
             deltas.clear();
             prices.clear();
             responses.clear();
+            budgets.clear();
+
+            currentRound = 1;
+            countersThisRound = 0;
+            maxCountersInRound = 0;
+            quickCounters = 0;
+            probeReplies = 0;
+            strongProbeReplies = 0;
+            lastStrongResponse = false;
         }
 
-        void recordOpponentBid(int delta, int price, long responseMs) {
+        void startRound(int round) {
+            maxCountersInRound = Math.max(maxCountersInRound, countersThisRound);
+            countersThisRound = 0;
+            currentRound = Math.max(1, Math.min(5, round));
+            lastStrongResponse = false;
+        }
+
+        void recordOpponentBid(int delta, int price, long responseMs,
+                               int opponentBudget, boolean replyToProbe) {
             if (delta <= 0 || delta > 30) return;
 
             deltas.add(delta);
             prices.add(price);
+            budgets.add(opponentBudget);
+
+            countersThisRound++;
+            maxCountersInRound = Math.max(maxCountersInRound, countersThisRound);
 
             if (responseMs >= 0 && responseMs < 30000) {
                 responses.add(responseMs);
+                if (responseMs <= 1200) quickCounters++;
             }
 
-            if (deltas.size() > 40) deltas.remove(0);
-            if (prices.size() > 40) prices.remove(0);
-            if (responses.size() > 40) responses.remove(0);
+            boolean strong = delta >= 3 ||
+                    (responseMs >= 0 && responseMs <= 850);
+
+            lastStrongResponse = strong;
+
+            if (replyToProbe) {
+                probeReplies++;
+                if (strong) strongProbeReplies++;
+            }
+
+            trim(deltas, 50);
+            trim(prices, 50);
+            trim(responses, 50);
+            trim(budgets, 50);
+        }
+
+        private <T> void trim(List<T> list, int max) {
+            while (list.size() > max) list.remove(0);
+        }
+
+        public boolean lastResponseWasStrong() {
+            return lastStrongResponse;
         }
 
         public int confidence() {
-            return Math.min(97, 15 + deltas.size() * 11);
+            int evidence = deltas.size() * 9 +
+                    Math.min(12, responses.size() * 2) +
+                    Math.min(8, probeReplies * 4);
+            return Math.min(98, 12 + evidence);
         }
 
         public double averageIncrement() {
@@ -452,65 +660,108 @@ public class AuctionEngine {
             return max;
         }
 
+        public double smallIncrementRatio() {
+            if (deltas.isEmpty()) return 0.0;
+            int n = 0;
+            for (int d : deltas) if (d <= 2) n++;
+            return (double) n / deltas.size();
+        }
+
+        public double jumpRatio() {
+            if (deltas.isEmpty()) return 0.0;
+            int n = 0;
+            for (int d : deltas) if (d >= 4) n++;
+            return (double) n / deltas.size();
+        }
+
+        public double quickRatio() {
+            if (responses.isEmpty()) return 0.0;
+            return (double) quickCounters / responses.size();
+        }
+
+        public boolean isChaser() {
+            return maxCountersInRound >= 4 ||
+                    (countersThisRound >= 3 && quickRatio() >= .55);
+        }
+
         public boolean isHesitating() {
             if (responses.size() < 4) return false;
 
             int split = responses.size() / 2;
             List<Long> oldPart = new ArrayList<>(responses.subList(0, split));
             List<Long> newPart = new ArrayList<>(responses.subList(split, responses.size()));
+
             Collections.sort(oldPart);
             Collections.sort(newPart);
 
             long oldMedian = oldPart.get(oldPart.size() / 2);
             long newMedian = newPart.get(newPart.size() / 2);
 
-            return oldMedian > 0 && newMedian > oldMedian * 1.65 && newMedian - oldMedian > 350;
+            return oldMedian > 0 &&
+                    newMedian > oldMedian * 1.55 &&
+                    newMedian - oldMedian > 300;
         }
 
         public int estimatedCeiling() {
             if (prices.isEmpty()) return 0;
+
             int maxPrice = 0;
             for (int p : prices) maxPrice = Math.max(maxPrice, p);
 
             int extra;
-            if ("CAUTIOUS".equals(style())) extra = 2;
-            else if ("AGGRESSIVE".equals(style())) extra = Math.max(4, (int) Math.ceil(averageIncrement() * 2));
+            String c = style();
+
+            if ("CAUTIOUS".equals(c)) extra = 2;
+            else if ("AGGRESSIVE".equals(c)) extra =
+                    Math.max(4, (int) Math.ceil(averageIncrement() * 2.2));
             else extra = 3;
 
+            if (isChaser()) extra += 2;
             if (isHesitating()) extra = Math.min(extra, 2);
+
+            if (!budgets.isEmpty()) {
+                int remaining = budgets.get(budgets.size() - 1);
+                extra = Math.min(extra, Math.max(0, remaining));
+            }
+
             return maxPrice + extra;
         }
 
         public String style() {
             if (deltas.size() < 2) return "LEARNING";
 
-            int small = 0;
-            int big = 0;
-
-            for (int d : deltas) {
-                if (d <= 2) small++;
-                if (d >= 4) big++;
-            }
-
             double avg = averageIncrement();
-            double smallRatio = (double) small / deltas.size();
-            double bigRatio = (double) big / deltas.size();
+            double small = smallIncrementRatio();
+            double jumps = jumpRatio();
 
-            if (avg <= 1.8 && smallRatio >= 0.65) return "CAUTIOUS";
-            if (avg >= 3.0 || bigRatio >= 0.35) return "AGGRESSIVE";
+            if (avg <= 1.8 && small >= .65) return "CAUTIOUS";
+            if (avg >= 3.0 || jumps >= .30 || isChaser()) return "AGGRESSIVE";
+            return "BALANCED";
+        }
+
+        public String archetype() {
+            if (deltas.size() < 2) return "LEARNING";
+
+            if (isHesitating()) return "HESITATOR";
+            if (isChaser() && quickRatio() >= .50) return "FAST CHASER";
+            if (jumpRatio() >= .35 || averageIncrement() >= 3.2) return "JUMPER";
+            if (smallIncrementRatio() >= .75 && averageIncrement() <= 1.7) return "NIBBLER";
+            if (quickRatio() >= .70) return "FAST PRESSER";
+            if (probeReplies >= 2 && strongProbeReplies == 0) return "BUDGET GUARD";
             return "BALANCED";
         }
 
         public String summary() {
             return String.format(
                     Locale.US,
-                    "%s %d%% | avg +%.1f | max +%d | est %dM%s",
-                    style(),
+                    "%s %d%% | avg +%.1f | small %.0f%% | quick %.0f%% | est %dM%s",
+                    archetype(),
                     confidence(),
                     averageIncrement(),
-                    maxIncrement(),
+                    smallIncrementRatio() * 100.0,
+                    quickRatio() * 100.0,
                     estimatedCeiling(),
-                    isHesitating() ? " | HESITATING" : ""
+                    isHesitating() ? " | slowing" : ""
             );
         }
     }
