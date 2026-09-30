@@ -1363,13 +1363,24 @@ public class AuctionAccessibilityService extends AccessibilityService {
                                 "تخطي اللاعب", "تخطى اللاعب",
                                 "تخطي", "skip player", "skip");
 
-                        bmp.recycle();
-
                         if (hit == null) {
-                            bidFlowInProgress = false;
-                            status("PASS ✓ لكن زر «تخطي اللاعب» غير ظاهر — أراقب فقط");
-                            lastDecision = "PASS";
+                            bmp.recycle();
+                            lastDecision = "SKIP→";
                             refreshOverlay();
+                            status("PASS ✓ — OCR لم يقرأ زر التخطي، أستخدم مكانه الثابت");
+                            tapSavedPoint("skip", ok -> {
+                                bidFlowInProgress = false;
+                                if (ok) {
+                                    lastDecision = "SKIP✓";
+                                    refreshOverlay();
+                                    status("«تخطي اللاعب» اتضغط ✓");
+                                    queueScan(ACTION_DEBOUNCE_MS + 120);
+                                } else {
+                                    lastDecision = "SKIP✕";
+                                    refreshOverlay();
+                                    status("فشل ضغط تخطي اللاعب");
+                                }
+                            });
                             return;
                         }
 
