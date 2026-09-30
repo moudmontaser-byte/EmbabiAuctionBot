@@ -187,12 +187,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void startBot(boolean fresh) {
-        if (!Prefs.isCalibrated(this)) {
-            status("المعايرة ناقصة — اضغط CAL وحدد 4 مربعات ثم + و Confirm");
-            showFloatingOverlay(true);
-            return;
-        }
-
+        // v16 can run without CAL: it has automatic screen zones and tap fallbacks.
+        // A completed CAL only improves precision and overrides the defaults.
         AccessibilityServiceInfo info = getServiceInfo();
         if (info == null ||
                 (info.getCapabilities() & AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) == 0) {
@@ -230,7 +226,10 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
 
         showFloatingOverlay(true);
-        status(paused ? "البوت محفوظ على PAUSE" : "البوت شغال — أراقب حالة الشاشة");
+        status(paused ? "البوت محفوظ على PAUSE" :
+                (Prefs.isCalibrated(this)
+                        ? "البوت شغال — CAL + AUTO"
+                        : "البوت شغال — AUTO بدون CAL"));
         h.removeCallbacks(monitor);
         h.post(monitor);
         queueScan(80);
