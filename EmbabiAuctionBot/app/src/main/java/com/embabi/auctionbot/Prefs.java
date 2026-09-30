@@ -115,14 +115,8 @@ public final class Prefs {
     public static boolean isCalibrated(Context c) {
         SharedPreferences p = sp(c);
 
-        // Do not ever reuse partial/old calibration from an older build.
-        if (p.getInt("calibration_schema", 0) != CALIBRATION_SCHEMA) return false;
-
-        for (String key : ROI_KEYS) {
-            RectF r = getRegion(c, key);
-            if (r == null || r.width() < .015f || r.height() < .012f) return false;
-        }
-
+        // v16+: numeric fields are read automatically from their screen zones.
+        // Calibration is only for the two physical auction controls.
         boolean rawPlus = p.contains("px_x_plus") && p.contains("px_y_plus");
         boolean rawConfirm = p.contains("px_x_confirm") && p.contains("px_y_confirm");
 
