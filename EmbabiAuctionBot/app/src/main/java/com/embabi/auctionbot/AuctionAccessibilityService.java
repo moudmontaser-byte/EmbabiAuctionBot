@@ -771,6 +771,20 @@ public class AuctionAccessibilityService extends AccessibilityService {
         });
     }
 
+    private boolean ocrRectHitsOverlay(Rect r) {
+        if (r == null || floatingView == null || floatingLp == null ||
+                floatingView.getWidth() <= 0 || floatingView.getHeight() <= 0) {
+            return false;
+        }
+        Rect ov = new Rect(
+                floatingLp.x,
+                floatingLp.y,
+                floatingLp.x + floatingView.getWidth(),
+                floatingLp.y + floatingView.getHeight()
+        );
+        return Rect.intersects(ov, r);
+    }
+
     private Rect findOcrTextRect(Text tx, String... targets) {
         if (tx == null) return null;
 
@@ -781,7 +795,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 for (String target : targets) {
                     if (lineText.contains(normalize(target))) {
                         Rect r = line.getBoundingBox();
-                        if (r != null && !r.isEmpty()) return new Rect(r);
+                        if (r != null && !r.isEmpty() && !ocrRectHitsOverlay(r)) return new Rect(r);
                     }
                 }
 
@@ -790,7 +804,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                     for (String target : targets) {
                         if (elementText.contains(normalize(target))) {
                             Rect r = el.getBoundingBox();
-                            if (r != null && !r.isEmpty()) return new Rect(r);
+                            if (r != null && !r.isEmpty() && !ocrRectHitsOverlay(r)) return new Rect(r);
                         }
                     }
                 }
