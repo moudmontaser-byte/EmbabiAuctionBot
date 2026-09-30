@@ -1869,19 +1869,12 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private void detectAuctionTurnVisually() {
         if (turnVisualBusy || screenshotBusy || screenReadBusy) return;
 
-        Rect bounds = Build.VERSION.SDK_INT >= 30
-                ? wm.getMaximumWindowMetrics().getBounds()
-                : new Rect(0, 0,
-                    getResources().getDisplayMetrics().widthPixels,
-                    getResources().getDisplayMetrics().heightPixels);
-
-        PointF p = Prefs.getTapPointPx(this, "confirm", bounds.width(), bounds.height());
-        if (p == null) {
-            status("مكان Confirm مش محفوظ — اعمل CAL");
+        RectF turnRegion = Prefs.getRegion(this, "turn");
+        if (turnRegion == null) {
+            status("منطقة زر المزايدة مش محفوظة — اعمل CAL");
             return;
         }
 
-        moveOverlayAwayFromPoint(p.x, p.y);
         turnVisualBusy = true;
 
         captureBitmap(bmp -> {
@@ -1893,16 +1886,14 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 return;
             }
 
-            int cx = Math.max(0, Math.min(bmp.getWidth() - 1, Math.round(p.x)));
-            int cy = Math.max(0, Math.min(bmp.getHeight() - 1, Math.round(p.y)));
-
-            int rx = Math.max(90, Math.round(bmp.getWidth() * .18f));
-            int ry = Math.max(28, Math.round(bmp.getHeight() * .028f));
-
-            int l = Math.max(0, cx - rx);
-            int r = Math.min(bmp.getWidth(), cx + rx);
-            int t = Math.max(0, cy - ry);
-            int b = Math.min(bmp.getHeight(), cy + ry);
+            int l = Math.max(0, Math.min(bmp.getWidth() - 1,
+                    Math.round(turnRegion.left * bmp.getWidth())));
+            int r = Math.max(l + 1, Math.min(bmp.getWidth(),
+                    Math.round(turnRegion.right * bmp.getWidth())));
+            int t = Math.max(0, Math.min(bmp.getHeight() - 1,
+                    Math.round(turnRegion.top * bmp.getHeight())));
+            int b = Math.max(t + 1, Math.min(bmp.getHeight(),
+                    Math.round(turnRegion.bottom * bmp.getHeight())));
 
             int green = 0, amber = 0, neutral = 0, total = 0;
             int sx = Math.max(2, (r-l)/90);
