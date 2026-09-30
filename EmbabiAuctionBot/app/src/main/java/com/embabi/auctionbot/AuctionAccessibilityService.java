@@ -474,7 +474,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
-        scanUnknownScreenByOcr();
+        verifyTurnLabelByOcr();
     }
 
     private Integer extractGuiRound(String all) {
@@ -1659,10 +1659,18 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void verifyTurnLabelByOcr() {
-        if (turnVisualBusy || screenshotBusy) return;
+        if (turnVisualBusy || screenshotBusy || screenReadBusy) return;
 
-        PointF p = Prefs.getPoint(this, "confirm");
-        if (p == null) {
+        Rect bounds = Build.VERSION.SDK_INT >= 30
+                ? wm.getMaximumWindowMetrics().getBounds()
+                : new Rect(0, 0,
+                    getResources().getDisplayMetrics().widthPixels,
+                    getResources().getDisplayMetrics().heightPixels);
+
+        PointF raw = Prefs.getTapPointPx(this, "confirm", bounds.width(), bounds.height());
+        PointF norm = Prefs.getPoint(this, "confirm");
+
+        if (raw == null && norm == null) {
             status("مكان Confirm مش محفوظ — اعمل CAL");
             return;
         }
@@ -1670,18 +1678,29 @@ public class AuctionAccessibilityService extends AccessibilityService {
         turnVisualBusy = true;
 
         captureBitmap(bmp -> {
-            turnVisualBusy = false;
-
             if (bmp == null) {
+                turnVisualBusy = false;
                 status("تعذر قراءة زر المزايدة — بدون كليك");
+                h.postDelayed(this::scanUnknownScreenByOcr, 150);
                 return;
             }
 
-            int cx = Math.round(p.x * bmp.getWidth());
-            int cy = Math.round(p.y * bmp.getHeight());
+            int cx;
+            int cy;
 
-            int rx = Math.max(80, Math.round(bmp.getWidth() * .22f));
-            int ry = Math.max(28, Math.round(bmp.getHeight() * .045f));
+            if (raw != null) {
+                cx = Math.round(raw.x);
+                cy = Math.round(raw.y);
+            } else {
+                cx = Math.round(norm.x * bmp.getWidth());
+                cy = Math.round(norm.y * bmp.getHeight());
+            }
+
+            cx = Math.max(0, Math.min(bmp.getWidth() - 1, cx));
+            cy = Math.max(0, Math.min(bmp.getHeight() - 1, cy));
+
+            int rx = Math.max(110, Math.round(bmp.getWidth() * .24f));
+            int ry = Math.max(42, Math.round(bmp.getHeight() * .050f));
 
             int l = Math.max(0, cx - rx);
             int r = Math.min(bmp.getWidth(), cx + rx);
@@ -1693,52 +1712,89 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 crop = Bitmap.createBitmap(bmp, l, t, Math.max(1, r-l), Math.max(1, b-t));
             } catch (Exception e) {
                 bmp.recycle();
+                turnVisualBusy = false;
                 status("تعذر قص منطقة زر المزايدة");
+                h.postDelayed(this::scanUnknownScreenByOcr, 150);
                 return;
             }
             bmp.recycle();
 
-            Bitmap big = Bitmap.createScaledBitmap(crop,
-                    crop.getWidth() * 3, crop.getHeight() * 3, true);
+            Bitmap big = Bitmap.createScaledBitmap(
+                    crop,
+                    Math.max(1, crop.getWidth() * 4),
+                    Math.max(1, crop.getHeight() * 4),
+                    true
+            );
             crop.recycle();
 
             recognizer.process(InputImage.fromBitmap(big, 0))
                     .addOnSuccessListener(tx -> {
-                        String label = ocrTextWithoutOverlay(tx);
+                        turnVisualBusy = false;
+
+                        // IMPORTANT: tx bounding boxes are LOCAL to this crop.
+                        // Do not compare them to the screen-space overlay rectangle.
+                        String label = normalize(tx.getText());
                         big.recycle();
 
                         if (containsAny(label,
                                 "انتظار المزايدة", "انتظار المزايده",
                                 "waiting bid", "waiting for bid")) {
                             mustSeeWaitingBeforeNextBid = false;
-                            status("OCR: «انتظار المزايدة» ✓ — دور الخصم");
+                            confirmRetryCount = 0;
+                            status("OCR زر المزايدة: «انتظار المزايدة» ✓ — دور الخصم");
                             readAuctionSnapshot(false);
                             return;
                         }
 
                         if (containsAny(label,
                                 "تأكيد المزايدة", "تاكيد المزايده",
+                                "تأكيد مزايدة", "تاكيد مزايدة",
                                 "confirm bid", "confirm")) {
+
                             if (awaitingConfirm) {
-                                status("OCR: «تأكيد المزايدة» ✓ — أضغط Confirm");
+                                status("OCR زر المزايدة: Confirm ✓ — أضغطه");
                                 clickConfirmAndFinalize();
-                            } else if (!mustSeeWaitingBeforeNextBid) {
-                                status("OCR: «تأكيد المزايدة» ✓ — دورنا");
-                                readAuctionSnapshot(true);
+                            } else if (mustSeeWaitingBeforeNextBid) {
+                                if (confirmRetryCount < 2) {
+                                    confirmRetryCount++;
+                                    status("Confirm ما زال ظاهر — إعادة الضغط " + confirmRetryCount + "/2");
+                                    clickConfirmSmart(ok -> {
+                                        if (ok) {
+                                            actionCooldownUntil =
+                                                    System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
+                                            queueScan(ACTION_DEBOUNCE_MS + 120);
+                                        } else {
+                                            paused = true;
+                                            Prefs.setBotPaused(this, true);
+                                            status("تعذر ضغط Confirm — PAUSE");
+                                        }
+                                    });
+                                } else {
+                                    paused = true;
+                                    Prefs.setBotPaused(this, true);
+                                    status("Confirm لم يستجب بعد محاولتين — PAUSE");
+                                }
                             } else {
-                                status("OCR: Confirm ظاهر لكن أنتظر مرور دور الخصم أولًا");
+                                status("OCR زر المزايدة: «تأكيد المزايدة» ✓ — دورنا");
+                                readAuctionSnapshot(true);
                             }
                             return;
                         }
 
-                        status("زر المزايدة غير مقروء بوضوح — لا ألمس شيء");
+                        // The small button crop did not identify the turn. Now and only
+                        // now fall back to full-screen OCR for navigation/post-match words.
+                        status("زر المزايدة غير واضح — أفحص الشاشة كاملة");
+                        h.postDelayed(this::scanUnknownScreenByOcr, 120);
                     })
                     .addOnFailureListener(e -> {
+                        turnVisualBusy = false;
                         big.recycle();
-                        status("OCR زر المزايدة فشل — لا ألمس شيء");
+                        status("OCR زر المزايدة فشل — أفحص الشاشة كاملة");
+                        h.postDelayed(this::scanUnknownScreenByOcr, 120);
                     });
         });
     }
+
 
     private int[] fingerprintAtSavedPoint(Bitmap bmp, String key) {
         PointF p = Prefs.getPoint(this, key);
