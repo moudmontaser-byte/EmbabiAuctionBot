@@ -1,0 +1,85 @@
+name: Build APK from uploaded ZIP
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'EmbabiAuctionGenius_UPLOAD_TO_BUILD.zip'
+      - '.github/workflows/build-uploaded-zip.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract uploaded source
+        shell: bash
+        run: |
+          rm -rf uploaded-build
+          mkdir -p uploaded-build
+          unzip -q EmbabiAuctionGenius_UPLOAD_TO_BUILD.zip -d uploaded-build
+          echo "Extracted:"
+          find uploaded-build -maxdepth 3 -type f | sort | head -100
+
+      - name: Find Android project
+        id: project
+        shell: bash
+        run: |
+          SETTINGS=$(find uploaded-build -type f \( -name settings.gradle -o -name settings.gradle.kts \) | head -1)
+          if [ -z "$SETTINGS" ]; then
+            echo "No settings.gradle found in ZIP"
+            exit 1
+          fi
+          DIR=$(dirname "$SETTINGS")
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "Android project: $DIR"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK 35
+        shell: bash
+        run: |
+          SDKMANAGER="/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build APK
+        shell: bash
+        run: |
+          cd "${{ steps.project.outputs.dir }}"
+          gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Locate APK
+        id: apk
+        shell: bash
+        run: |
+          APK=$(find "${{ steps.project.outputs.dir }}" -path '*/build/outputs/apk/debug/*.apk' -type f | head -1)
+          if [ -z "$APK" ]; then
+            echo "APK not found"
+            exit 1
+          fi
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+          echo "APK: $APK"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: EmbabiAuctionGenius-v4-PRO-APK
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
