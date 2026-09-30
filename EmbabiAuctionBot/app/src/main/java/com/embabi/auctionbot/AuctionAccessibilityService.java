@@ -785,6 +785,19 @@ public class AuctionAccessibilityService extends AccessibilityService {
         return Rect.intersects(ov, r);
     }
 
+    private String ocrTextWithoutOverlay(Text tx) {
+        if (tx == null) return "";
+        StringBuilder sb = new StringBuilder();
+        for (Text.TextBlock block : tx.getTextBlocks()) {
+            for (Text.Line line : block.getLines()) {
+                Rect r = line.getBoundingBox();
+                if (r != null && ocrRectHitsOverlay(r)) continue;
+                sb.append(' ').append(line.getText());
+            }
+        }
+        return normalize(sb.toString());
+    }
+
     private Rect findOcrTextRect(Text tx, String... targets) {
         if (tx == null) return null;
 
@@ -1422,7 +1435,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
             recognizer.process(InputImage.fromBitmap(bmp, 0))
                     .addOnSuccessListener(tx -> {
                         turnVisualBusy = false;
-                        String all = normalize(tx.getText());
+                        String all = ocrTextWithoutOverlay(tx);
 
                         if (isPostMatchScreen(all)) {
                             bmp.recycle();
@@ -1544,7 +1557,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
             recognizer.process(InputImage.fromBitmap(big, 0))
                     .addOnSuccessListener(tx -> {
-                        String label = normalize(tx.getText());
+                        String label = ocrTextWithoutOverlay(tx);
                         big.recycle();
 
                         if (containsAny(label,
