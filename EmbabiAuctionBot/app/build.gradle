@@ -11,7 +11,7 @@ android {
         minSdk 30
         targetSdk 35
         versionCode 160
-        versionName "16.0-auto-ocr-two-tap-cal"
+        versionName "16.0-frame-study-root-fix"
     }
 
     compileOptions {
