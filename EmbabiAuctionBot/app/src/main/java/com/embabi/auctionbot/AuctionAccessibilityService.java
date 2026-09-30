@@ -30,7 +30,15 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private interface BitmapConsumer { void accept(Bitmap bitmap); }
     private interface IntResult { void accept(Integer value); }
 
-    private static final long ACTION_DEBOUNCE_MS = 1050L;
+    private static class NumericHints {
+        Integer rating;
+        Integer price;
+        Integer mine;
+        Integer opp;
+    }
+
+
+    private static final long ACTION_DEBOUNCE_MS = 1150L;
     private final Handler h = new Handler(Looper.getMainLooper());
     private final TextRecognizer recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
 
@@ -470,6 +478,61 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
     }
 
+    private NumericHints parseNumericHints(String raw) {
+        NumericHints h = new NumericHints();
+        if (raw == null) return h;
+
+        String text = normalize(toWesternDigits(raw));
+
+        h.rating = findNumberNearAny(text, 50, 99,
+                "التقييم", "تقييم اللاعب", "rating", "ovr");
+
+        h.price = findNumberNearAny(text, 0, 100,
+                "المزايده الحاليه", "المزايدة الحالية",
+                "السعر الحالي", "سعر المزايده", "سعر المزايدة",
+                "مزايدتك", "current bid", "current price", "bid price");
+
+        h.mine = findNumberNearAny(text, 0, 100,
+                "ميزانيتك", "ميزانيه اللاعب", "ميزانية اللاعب",
+                "رصيدك", "فلوسك", "your budget", "my budget");
+
+        h.opp = findNumberNearAny(text, 0, 100,
+                "ميزانيه الخصم", "ميزانية الخصم",
+                "ميزانيه خصمك", "ميزانية خصمك",
+                "رصيد الخصم", "opponent budget", "opp budget");
+
+        return h;
+    }
+
+    private Integer findNumberNearAny(String text, int min, int max, String... keys) {
+        if (text == null || text.isEmpty()) return null;
+
+        for (String key : keys) {
+            String k = normalize(key);
+            Pattern after = Pattern.compile(Pattern.quote(k) +
+                    "[^0-9]{0,28}(100|[0-9]{1,2})(?![0-9])");
+            Matcher ma = after.matcher(text);
+            while (ma.find()) {
+                try {
+                    int v = Integer.parseInt(ma.group(1));
+                    if (v >= min && v <= max) return v;
+                } catch (Exception ignored) {}
+            }
+
+            Pattern before = Pattern.compile("(?<![0-9])(100|[0-9]{1,2})" +
+                    "[^0-9]{0,18}" + Pattern.quote(k));
+            Matcher mb = before.matcher(text);
+            while (mb.find()) {
+                try {
+                    int v = Integer.parseInt(mb.group(1));
+                    if (v >= min && v <= max) return v;
+                } catch (Exception ignored) {}
+            }
+        }
+
+        return null;
+    }
+
     private boolean isTargetPackage(AccessibilityNodeInfo root) {
         CharSequence p = root.getPackageName();
         if (p == null) return false;
@@ -500,10 +563,17 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private boolean isPostMatchScreen(String all) {
         return containsAny(all,
-                "نهاية المباراه", "نهاية المباراة", "تقدم المباراه", "تقدم المباراة",
-                "لحظات مباشره", "لحظات مباشرة", "ملخص المباراه", "ملخص المباراة",
-                "رجل المباراه", "رجل المباراة", "الاهداف والكروت", "الأهداف والكروت",
-                "عرض التشكيلات", "عرض النتائج", "view lineups", "view results");
+                "نهاية المباراه", "نهاية المباراة",
+                "انتهت المباراه", "انتهت المباراة",
+                "النتيجه النهائيه", "النتيجة النهائية",
+                "تقدم المباراه", "تقدم المباراة",
+                "لحظات مباشره", "لحظات مباشرة",
+                "ملخص المباراه", "ملخص المباراة",
+                "رجل المباراه", "رجل المباراة",
+                "الاهداف والكروت", "الأهداف والكروت",
+                "عرض التشكيلات", "عرض النتائج",
+                "مشاهده التشكيلات", "مشاهدة التشكيلات",
+                "view lineups", "view results", "match summary");
     }
 
     private boolean isGamesHub(String all) {
@@ -663,18 +733,29 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if (!Prefs.isCalibrated(this)) {
             paused = true;
             Prefs.setBotPaused(this, true);
-            status("المعايرة ناقصة — SAFETY PAUSE");
+            status("المعايرة ناقصة — اعمل CAL مرة واحدة");
             return;
         }
+
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        String rawTree = root == null ? "" : collectText(root);
+        NumericHints hints = parseNumericHints(rawTree);
 
         screenReadBusy = true;
 
         captureBitmap(bmp -> {
             if (bmp == null) {
                 screenReadBusy = false;
-                stableCandidate = null;
-                stableCandidateCount = 0;
-                status("تعذر Screenshot — بدون قرار أو كليك");
+
+                // If the WebView itself exposed all labelled numbers, do not block on screenshot.
+                if (hints.rating != null && hints.price != null &&
+                        hints.mine != null && hints.opp != null) {
+                    handleSnapshot(hints.rating, hints.price, hints.mine, hints.opp, allowAction);
+                } else {
+                    stableCandidate = null;
+                    stableCandidateCount = 0;
+                    status("تعذر Screenshot والـWebView لم يعط كل الأرقام — بدون كليك");
+                }
                 return;
             }
 
@@ -691,7 +772,16 @@ public class AuctionAccessibilityService extends AccessibilityService {
                     if (done[0] == 4) {
                         bmp.recycle();
                         screenReadBusy = false;
-                        handleSnapshot(vals[0], vals[1], vals[2], vals[3], allowAction);
+
+                        // Rating: OCR box first. Labelled WebView value is backup.
+                        Integer rating = vals[0] != null ? vals[0] : hints.rating;
+
+                        // Price/budgets: labelled WebView values are usually cleaner than OCR.
+                        Integer price = hints.price != null ? hints.price : vals[1];
+                        Integer mine = hints.mine != null ? hints.mine : vals[2];
+                        Integer opp = hints.opp != null ? hints.opp : vals[3];
+
+                        handleSnapshot(rating, price, mine, opp, allowAction);
                     }
                 };
             }
@@ -949,7 +1039,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         bidFlowInProgress = true;
         engine.markOwnBidStarted(snap.price);
-        status("قرار BID ✓ — أضغط + مرة واحدة");
+        status("BID ✓ — Physical tap على +");
 
         clickPlusSmart(ok -> {
             bidFlowInProgress = false;
@@ -992,7 +1082,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 "confirm bid", "confirm");
 
         if (c != null) {
-            status("«تأكيد المزايدة» ما زال ظاهر ✓ — أضغطه مرة واحدة");
+            status("«تأكيد المزايدة» ظاهر ✓ — Physical tap على Confirm");
             clickConfirmAndFinalize();
             return;
         }
@@ -1478,7 +1568,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(4), dp(3), dp(4), dp(4));
         box.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        box.setBackground(round(Color.argb(216,7,18,32), Color.rgb(91,82,225), 11));
+        box.setBackground(round(Color.argb(198,7,18,32), Color.rgb(91,82,225), 11));
 
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL);
@@ -1587,7 +1677,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         floatingView = box;
 
         int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        int compactWidth = Math.max(dp(136), Math.round(screenWidth * .40f));
+        int compactWidth = Math.max(dp(136), Math.round(screenWidth * .34f));
 
         floatingLp = new WindowManager.LayoutParams(
                 compactWidth, -2,
@@ -1745,31 +1835,52 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void clickPlusSmart(Callback cb) {
-        if (clickPlusNode()) {
-            actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
-            cb.onDone(true);
-            return;
-        }
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        AccessibilityNodeInfo n = root == null ? null : findPlusRec(root, 0);
+
+        // WebView ACTION_CLICK can report success without producing a real browser tap.
+        // For auction controls we always send a physical Accessibility gesture.
+        if (n != null && tapNodePhysically(n, cb)) return;
+
         tapSavedPoint("plus", cb);
     }
 
     private void clickConfirmSmart(Callback cb) {
         AccessibilityNodeInfo root = getRootInActiveWindow();
         AccessibilityNodeInfo n = findVisibleTextAny(root,
-                "confirm", "confirm bid", "place bid", "تأكيد", "تاكيد", "تأكيد المزايدة", "تاكيد المزايده");
-        if (n != null && clickNode(n)) {
-            actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
-            cb.onDone(true);
-            return;
-        }
+                "تأكيد المزايدة", "تاكيد المزايده",
+                "confirm bid", "place bid", "confirm");
+
+        if (n != null && tapNodePhysically(n, cb)) return;
+
         tapSavedPoint("confirm", cb);
+    }
+
+    private boolean tapNodePhysically(AccessibilityNodeInfo n, Callback cb) {
+        if (n == null || !nodeOnScreen(n)) return false;
+
+        Rect r = new Rect();
+        n.getBoundsInScreen(r);
+        if (r.isEmpty()) return false;
+
+        dispatchTapPx(r.centerX(), r.centerY(),
+                () -> cb.onDone(true),
+                () -> cb.onDone(false));
+        return true;
     }
 
     private boolean clickPlusNode() {
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) return false;
         AccessibilityNodeInfo n = findPlusRec(root, 0);
-        return n != null && clickNode(n);
+        if (n == null) return false;
+
+        Rect r = new Rect();
+        n.getBoundsInScreen(r);
+        if (r.isEmpty()) return false;
+
+        dispatchTapPx(r.centerX(), r.centerY(), null, null);
+        return true;
     }
 
     private AccessibilityNodeInfo findPlusRec(AccessibilityNodeInfo n, int depth) {
