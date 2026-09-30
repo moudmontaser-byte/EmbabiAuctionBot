@@ -1,0 +1,18 @@
+name: Inspect HiddenPlayer state-machine core
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/inspect_hidden_core.yml'
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print core
+        shell: bash
+        run: |
+          rm -rf /tmp/legacy && mkdir -p /tmp/legacy
+          unzip -q EmbabiAuctionBot_V0.1_CloudBuild.zip -d /tmp/legacy
+          F=/tmp/legacy/HiddenPlayerBot_v10/app/src/main/java/com/embabi/hiddenplayer/HiddenPlayerAccessibilityService.java
+          sed -n '175,340p' "$F"
