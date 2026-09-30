@@ -100,7 +100,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private final Runnable monitor = new Runnable() {
         @Override public void run() {
             if (running && !paused) analyzeCurrentScreen();
-            if (running) h.postDelayed(this, 650);
+            if (running) h.postDelayed(this, 1000);
         }
     };
 
@@ -1027,6 +1027,20 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private void handleSnapshot(Integer rating, Integer price, Integer mine, Integer opp,
                                 boolean allowAction) {
+        // Rating + current price are mandatory. Budgets can safely fall back
+        // to the last valid reading (or 100/100 at the beginning of a fresh match).
+        if (mine == null || mine < 0 || mine > 100) {
+            mine = (lastMine != null && lastMine >= 0 && lastMine <= 100)
+                    ? lastMine
+                    : (currentRound() == 1 ? 100 : null);
+        }
+
+        if (opp == null || opp < 0 || opp > 100) {
+            opp = (lastOpp != null && lastOpp >= 0 && lastOpp <= 100)
+                    ? lastOpp
+                    : (currentRound() == 1 ? 100 : null);
+        }
+
         boolean valid = rating != null && rating >= 50 && rating <= 99 &&
                 price != null && price >= 0 && price <= 100 &&
                 mine != null && mine >= 0 && mine <= 100 &&
@@ -1563,56 +1577,31 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         screenshotBusy = true;
 
-        final boolean restoreOverlay =
-                floatingView != null && floatingView.getVisibility() == View.VISIBLE;
+        try {
+            takeScreenshot(0, getMainExecutor(), new TakeScreenshotCallback() {
+                @Override public void onSuccess(ScreenshotResult result) {
+                    Bitmap copy = null;
 
-        if (restoreOverlay) {
-            floatingView.setVisibility(View.INVISIBLE);
-        }
+                    try {
+                        HardwareBuffer hb = result.getHardwareBuffer();
+                        Bitmap hw = Bitmap.wrapHardwareBuffer(hb, result.getColorSpace());
+                        if (hw != null) copy = hw.copy(Bitmap.Config.ARGB_8888, false);
+                        hb.close();
+                    } catch (Exception ignored) {}
 
-        // Let the overlay disappear from the compositor before capturing.
-        h.postDelayed(() -> {
-            try {
-                takeScreenshot(0, getMainExecutor(), new TakeScreenshotCallback() {
-                    @Override public void onSuccess(ScreenshotResult result) {
-                        Bitmap copy = null;
-
-                        try {
-                            HardwareBuffer hb = result.getHardwareBuffer();
-                            Bitmap hw = Bitmap.wrapHardwareBuffer(hb, result.getColorSpace());
-                            if (hw != null) copy = hw.copy(Bitmap.Config.ARGB_8888, false);
-                            hb.close();
-                        } catch (Exception ignored) {}
-
-                        screenshotBusy = false;
-
-                        if (restoreOverlay && floatingView != null) {
-                            floatingView.setVisibility(View.VISIBLE);
-                        }
-
-                        cb.accept(copy);
-                    }
-
-                    @Override public void onFailure(int errorCode) {
-                        screenshotBusy = false;
-
-                        if (restoreOverlay && floatingView != null) {
-                            floatingView.setVisibility(View.VISIBLE);
-                        }
-
-                        cb.accept(null);
-                    }
-                });
-            } catch (Exception e) {
-                screenshotBusy = false;
-
-                if (restoreOverlay && floatingView != null) {
-                    floatingView.setVisibility(View.VISIBLE);
+                    screenshotBusy = false;
+                    cb.accept(copy);
                 }
 
-                cb.accept(null);
-            }
-        }, 140);
+                @Override public void onFailure(int errorCode) {
+                    screenshotBusy = false;
+                    cb.accept(null);
+                }
+            });
+        } catch (Exception e) {
+            screenshotBusy = false;
+            cb.accept(null);
+        }
     }
 
     // ---------- Calibration: 4 OCR rectangles + + point + Confirm point ----------
@@ -1906,83 +1895,98 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(4), dp(3), dp(4), dp(4));
+        box.setPadding(dp(expanded ? 8 : 5), dp(expanded ? 6 : 4), dp(expanded ? 8 : 5), dp(expanded ? 7 : 4));
         box.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        box.setBackground(round(Color.argb(198,7,18,32), Color.rgb(91,82,225), 11));
+        box.setBackground(round(
+                Color.argb(expanded ? 225 : 205, 7, 18, 32),
+                Color.rgb(91,82,225),
+                expanded ? 14 : 11));
 
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
 
-        TextView title = ovText("◈ AUCTION", 9.7f, Color.WHITE, true);
+        LinearLayout dragArea = new LinearLayout(this);
+        dragArea.setOrientation(LinearLayout.HORIZONTAL);
+        dragArea.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView title = ovText(expanded ? "◈ AUCTION GENIUS" : "◈ AUCTION", expanded ? 12.5f : 10f, Color.WHITE, true);
         title.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
 
-        ovRunState = ovText("", 8.2f, Color.rgb(0,230,150), true);
+        ovRunState = ovText("", expanded ? 10.5f : 9f, Color.rgb(0,230,150), true);
         ovRunState.setGravity(Gravity.CENTER);
 
-        TextView collapse = ovText(expanded ? "−" : "☰", 15, Color.rgb(160,186,255), true);
+        dragArea.addView(title, new LinearLayout.LayoutParams(0, dp(expanded ? 36 : 25), 1.15f));
+        dragArea.addView(ovRunState, new LinearLayout.LayoutParams(0, dp(expanded ? 36 : 25), 1f));
+
+        TextView collapse = ovText(expanded ? "−" : "☰", expanded ? 22 : 17, Color.rgb(160,186,255), true);
         collapse.setGravity(Gravity.CENTER);
-        TextView close = ovText("×", 16, Color.rgb(255,105,125), true);
+        TextView close = ovText("×", expanded ? 23 : 18, Color.rgb(255,105,125), true);
         close.setGravity(Gravity.CENTER);
 
-        head.addView(title, new LinearLayout.LayoutParams(0, dp(23), 1.0f));
-        head.addView(ovRunState, new LinearLayout.LayoutParams(0, dp(23), 1.25f));
-        head.addView(collapse, new LinearLayout.LayoutParams(dp(25), dp(23)));
-        head.addView(close, new LinearLayout.LayoutParams(dp(25), dp(23)));
+        head.addView(dragArea, new LinearLayout.LayoutParams(0, dp(expanded ? 36 : 25), 1));
+        head.addView(collapse, new LinearLayout.LayoutParams(dp(expanded ? 42 : 28), dp(expanded ? 36 : 25)));
+        head.addView(close, new LinearLayout.LayoutParams(dp(expanded ? 42 : 28), dp(expanded ? 36 : 25)));
         box.addView(head);
 
         if (expanded) {
-            ovStatus = ovText(lastStatus, 7.8f, Color.rgb(207,219,239), false);
-            ovStatus.setSingleLine(true);
+            ovStatus = ovText(lastStatus, 10.2f, Color.rgb(215,226,242), false);
+            ovStatus.setMaxLines(2);
             ovStatus.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            box.addView(ovStatus, new LinearLayout.LayoutParams(-1, dp(18)));
+            box.addView(ovStatus, new LinearLayout.LayoutParams(-1, dp(38)));
 
             LinearLayout metrics = new LinearLayout(this);
             metrics.setOrientation(LinearLayout.HORIZONTAL);
-            metrics.setPadding(0, dp(2), 0, 0);
+            metrics.setPadding(0, dp(3), 0, 0);
 
-            ovRating = chip("O" + show(lastRating), Color.rgb(15,45,67));
-            ovPrice = chip("€" + show(lastPrice), Color.rgb(15,45,67));
-            ovBudgets = chip("Y" + show(lastMine) + "/O" + show(lastOpp), Color.rgb(15,45,67));
+            ovRating = chip("OVR " + show(lastRating), Color.rgb(15,45,67));
+            ovPrice = chip("P " + show(lastPrice) + "M", Color.rgb(15,45,67));
+            ovBudgets = chip("Y " + show(lastMine) + " / O " + show(lastOpp), Color.rgb(15,45,67));
             ovDecision = chip(lastDecision, Color.rgb(15,45,67));
 
-            metrics.addView(ovRating, new LinearLayout.LayoutParams(0, dp(24), 1));
-            addGap(metrics, 2);
-            metrics.addView(ovPrice, new LinearLayout.LayoutParams(0, dp(24), 1));
-            addGap(metrics, 2);
-            metrics.addView(ovBudgets, new LinearLayout.LayoutParams(0, dp(24), 1.55f));
-            addGap(metrics, 2);
-            metrics.addView(ovDecision, new LinearLayout.LayoutParams(0, dp(24), 1.15f));
+            metrics.addView(ovRating, new LinearLayout.LayoutParams(0, dp(34), 1));
+            addGap(metrics, 4);
+            metrics.addView(ovPrice, new LinearLayout.LayoutParams(0, dp(34), 1));
+            addGap(metrics, 4);
+            metrics.addView(ovBudgets, new LinearLayout.LayoutParams(0, dp(34), 1.55f));
+            addGap(metrics, 4);
+            metrics.addView(ovDecision, new LinearLayout.LayoutParams(0, dp(34), 1.35f));
             box.addView(metrics);
 
             LinearLayout players = new LinearLayout(this);
             players.setOrientation(LinearLayout.HORIZONTAL);
-            players.setPadding(0, dp(3), 0, 0);
+            players.setPadding(0, dp(5), 0, 0);
 
-            String[] pNames = {"GK", "DF", "C1", "C2", "ST"};
+            String[] pNames = {"GK", "DEF", "CM1", "CM2", "ST"};
             int activeSlot = Math.max(0, Math.min(4, currentRound() - 1));
 
             for (int i = 0; i < 5; i++) {
                 String text = pNames[i] + "\n" + Prefs.getMinRating(this, i);
                 int fill = i == activeSlot ? Color.rgb(78,58,180) : Color.rgb(15,45,67);
                 TextView p = chip(text, fill);
-                p.setTextSize(7.8f);
+                p.setTextSize(10.5f);
                 p.setGravity(Gravity.CENTER);
                 ovPlayerMins[i] = p;
-                players.addView(p, new LinearLayout.LayoutParams(0, dp(29), 1));
-                if (i < 4) addGap(players, 2);
+                players.addView(p, new LinearLayout.LayoutParams(0, dp(44), 1));
+                if (i < 4) addGap(players, 3);
             }
             box.addView(players);
 
             LinearLayout controls = new LinearLayout(this);
             controls.setOrientation(LinearLayout.HORIZONTAL);
-            controls.setPadding(0, dp(3), 0, 0);
+            controls.setPadding(0, dp(6), 0, 0);
 
-            Button start = ovButton("▶", Color.rgb(0,191,120));
-            Button pause = ovButton("Ⅱ", Color.rgb(26,55,82));
-            Button stop = ovButton("■", Color.rgb(105,24,42));
+            Button start = ovButton("START", Color.rgb(0,191,120));
+            Button pause = ovButton("PAUSE", Color.rgb(26,55,82));
+            Button stop = ovButton("STOP", Color.rgb(105,24,42));
             Button cal = ovButton("CAL", Color.rgb(25,133,220));
             Button test = ovButton("OCR", Color.rgb(34,58,86));
+
+            start.setTextSize(11);
+            pause.setTextSize(11);
+            stop.setTextSize(11);
+            cal.setTextSize(11);
+            test.setTextSize(11);
 
             start.setOnClickListener(v -> startBot(true));
             pause.setOnClickListener(v -> togglePause());
@@ -1990,18 +1994,18 @@ public class AuctionAccessibilityService extends AccessibilityService {
             cal.setOnClickListener(v -> startCalibration());
             test.setOnClickListener(v -> testOcr());
 
-            controls.addView(start, new LinearLayout.LayoutParams(0, dp(27), 1));
-            addGap(controls, 2);
-            controls.addView(pause, new LinearLayout.LayoutParams(0, dp(27), 1));
-            addGap(controls, 2);
-            controls.addView(stop, new LinearLayout.LayoutParams(0, dp(27), 1));
-            addGap(controls, 2);
-            controls.addView(cal, new LinearLayout.LayoutParams(0, dp(27), 1));
-            addGap(controls, 2);
-            controls.addView(test, new LinearLayout.LayoutParams(0, dp(27), 1));
+            controls.addView(start, new LinearLayout.LayoutParams(0, dp(42), 1.2f));
+            addGap(controls, 4);
+            controls.addView(pause, new LinearLayout.LayoutParams(0, dp(42), 1.2f));
+            addGap(controls, 4);
+            controls.addView(stop, new LinearLayout.LayoutParams(0, dp(42), 1.1f));
+            addGap(controls, 4);
+            controls.addView(cal, new LinearLayout.LayoutParams(0, dp(42), 1f));
+            addGap(controls, 4);
+            controls.addView(test, new LinearLayout.LayoutParams(0, dp(42), 1f));
             box.addView(controls);
         } else {
-            ovStatus = ovText(shortStatus(), 8.8f, Color.rgb(205,219,241), true);
+            ovStatus = ovText(shortStatus(), 9f, Color.rgb(205,219,241), true);
             ovStatus.setGravity(Gravity.CENTER);
             ovStatus.setSingleLine(true);
             box.addView(ovStatus, new LinearLayout.LayoutParams(-1, dp(22)));
@@ -2017,21 +2021,24 @@ public class AuctionAccessibilityService extends AccessibilityService {
         floatingView = box;
 
         int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        int compactWidth = Math.max(dp(118), Math.round(screenWidth * .30f));
+        int width = expanded
+                ? Math.max(dp(270), Math.round(screenWidth * .68f))
+                : Math.max(dp(120), Math.round(screenWidth * .32f));
 
         floatingLp = new WindowManager.LayoutParams(
-                compactWidth, -2,
+                width, -2,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
                         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT);
 
         floatingLp.gravity = Gravity.TOP | Gravity.START;
-        floatingLp.x = dp(4);
-        floatingLp.y = dp(58);
+        floatingLp.x = dp(6);
+        floatingLp.y = dp(62);
 
         final float[] touch = new float[4];
-        title.setOnTouchListener((v, e) -> {
+
+        View.OnTouchListener drag = (v, e) -> {
             if (floatingLp == null || floatingView == null) return false;
 
             if (e.getAction() == MotionEvent.ACTION_DOWN) {
@@ -2053,7 +2060,10 @@ public class AuctionAccessibilityService extends AccessibilityService {
             }
 
             return true;
-        });
+        };
+
+        // Large drag area: title + run state, instead of a tiny title only.
+        dragArea.setOnTouchListener(drag);
 
         try {
             wm.addView(box, floatingLp);
@@ -2432,13 +2442,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
-        final boolean restoreOverlay =
-                floatingView != null && floatingView.getVisibility() == View.VISIBLE;
-
-        if (restoreOverlay) {
-            floatingView.setVisibility(View.INVISIBLE);
-        }
-
+        setOverlayPassThrough(true);
         actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
 
         h.postDelayed(() -> {
@@ -2447,29 +2451,27 @@ public class AuctionAccessibilityService extends AccessibilityService {
             p.lineTo(x + .5f, y + .5f);
 
             GestureDescription.StrokeDescription stroke =
-                    new GestureDescription.StrokeDescription(p, 0, 110);
+                    new GestureDescription.StrokeDescription(p, 0, 120);
 
             GestureDescription g =
                     new GestureDescription.Builder().addStroke(stroke).build();
 
             boolean accepted;
+
             try {
                 accepted = dispatchGesture(g, new GestureResultCallback() {
                     @Override public void onCompleted(GestureDescription gestureDescription) {
                         super.onCompleted(gestureDescription);
+
                         h.postDelayed(() -> {
-                            if (restoreOverlay && floatingView != null) {
-                                floatingView.setVisibility(View.VISIBLE);
-                            }
+                            setOverlayPassThrough(false);
                             if (completed != null) completed.run();
                         }, 120);
                     }
 
                     @Override public void onCancelled(GestureDescription gestureDescription) {
                         super.onCancelled(gestureDescription);
-                        if (restoreOverlay && floatingView != null) {
-                            floatingView.setVisibility(View.VISIBLE);
-                        }
+                        setOverlayPassThrough(false);
                         if (cancelled != null) h.post(cancelled);
                     }
                 }, null);
@@ -2478,12 +2480,30 @@ public class AuctionAccessibilityService extends AccessibilityService {
             }
 
             if (!accepted) {
-                if (restoreOverlay && floatingView != null) {
-                    floatingView.setVisibility(View.VISIBLE);
-                }
+                setOverlayPassThrough(false);
                 if (cancelled != null) h.post(cancelled);
             }
-        }, 90);
+        }, 80);
+    }
+
+    private void setOverlayPassThrough(boolean passThrough) {
+        if (floatingView == null || floatingLp == null || wm == null) return;
+
+        int flags = floatingLp.flags;
+
+        if (passThrough) {
+            flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        } else {
+            flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        }
+
+        if (flags == floatingLp.flags) return;
+
+        floatingLp.flags = flags;
+
+        try {
+            wm.updateViewLayout(floatingView, floatingLp);
+        } catch (Exception ignored) {}
     }
 
     // ---------- UI helpers / status ----------
