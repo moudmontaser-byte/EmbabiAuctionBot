@@ -1317,6 +1317,53 @@ public class AuctionAccessibilityService extends AccessibilityService {
         refreshOverlay();
     }
 
+    private void ocrRect(Bitmap base, RectF n, boolean ratingMode, IntResult cb) {
+        if (base == null || n == null) {
+            cb.accept(null);
+            return;
+        }
+
+        int l = Math.max(0, Math.min(base.getWidth() - 1, Math.round(n.left * base.getWidth())));
+        int t = Math.max(0, Math.min(base.getHeight() - 1, Math.round(n.top * base.getHeight())));
+        int r = Math.max(l + 1, Math.min(base.getWidth(), Math.round(n.right * base.getWidth())));
+        int b = Math.max(t + 1, Math.min(base.getHeight(), Math.round(n.bottom * base.getHeight())));
+
+        Bitmap crop;
+        try {
+            crop = Bitmap.createBitmap(base, l, t, r - l, b - t);
+        } catch (Exception e) {
+            cb.accept(null);
+            return;
+        }
+
+        int scale = ratingMode ? 4 : 3;
+        Bitmap enlarged;
+        try {
+            enlarged = Bitmap.createScaledBitmap(
+                    crop,
+                    Math.max(1, crop.getWidth() * scale),
+                    Math.max(1, crop.getHeight() * scale),
+                    true
+            );
+        } catch (Exception e) {
+            crop.recycle();
+            cb.accept(null);
+            return;
+        }
+        crop.recycle();
+
+        recognizer.process(InputImage.fromBitmap(enlarged, 0))
+                .addOnSuccessListener(tx -> {
+                    Integer v = ratingMode ? extractRating(tx.getText()) : extractMoney(tx.getText());
+                    enlarged.recycle();
+                    cb.accept(v);
+                })
+                .addOnFailureListener(e -> {
+                    enlarged.recycle();
+                    cb.accept(null);
+                });
+    }
+
     private String show(Integer v) { return v == null ? "—" : String.valueOf(v); }
 
     private Integer extractRating(String raw) {
