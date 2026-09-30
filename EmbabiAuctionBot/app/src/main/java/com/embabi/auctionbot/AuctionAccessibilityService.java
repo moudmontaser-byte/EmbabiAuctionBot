@@ -431,7 +431,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 "دورك", "دورك الان", "دورك الآن",
                 "الدور انت", "الدور: انت", "your turn");
 
-        if (waitingBidText || (opponentTurnText && !confirmBidText && !myTurnText)) {
+        if ((waitingBidText && !confirmBidText && !myTurnText) ||
+                (opponentTurnText && !confirmBidText && !myTurnText)) {
             if (awaitingConfirm) {
                 cancelBidFlow();
                 paused = true;
@@ -1730,20 +1731,18 @@ public class AuctionAccessibilityService extends AccessibilityService {
                             return;
                         }
 
-                        if (containsAny(all,
-                                "انتظار المزايدة", "انتظار المزايده",
-                                "waiting bid", "waiting for bid")) {
-                            bmp.recycle();
-                            mustSeeWaitingBeforeNextBid = false;
-                            confirmRetryCount = 0;
-                            status("OCR: «انتظار المزايدة» = دور الخصم");
-                            readAuctionSnapshot(false);
-                            return;
-                        }
-
-                        if (containsAny(all,
+                        boolean ocrConfirm = containsAny(all,
                                 "تأكيد المزايدة", "تاكيد المزايده",
-                                "confirm bid")) {
+                                "تأكيد مزايدة", "تاكيد مزايدة",
+                                "confirm bid", "confirm");
+
+                        boolean ocrWaiting = containsAny(all,
+                                "انتظار المزايدة", "انتظار المزايده",
+                                "waiting bid", "waiting for bid");
+
+                        // Explicit Confirm is authoritative. The WebView/OCR can keep
+                        // stale Waiting text around for a frame, so Waiting may never override Confirm.
+                        if (ocrConfirm) {
                             bmp.recycle();
 
                             if (awaitingConfirm) {
@@ -1775,6 +1774,15 @@ public class AuctionAccessibilityService extends AccessibilityService {
                                 status("OCR: «تأكيد المزايدة» = دورنا");
                                 readAuctionSnapshot(true);
                             }
+                            return;
+                        }
+
+                        if (ocrWaiting) {
+                            bmp.recycle();
+                            mustSeeWaitingBeforeNextBid = false;
+                            confirmRetryCount = 0;
+                            status("OCR: «انتظار المزايدة» = دور الخصم");
+                            readAuctionSnapshot(false);
                             return;
                         }
 
@@ -1893,20 +1901,16 @@ public class AuctionAccessibilityService extends AccessibilityService {
                         String label = normalize(tx.getText());
                         big.recycle();
 
-                        if (containsAny(label,
-                                "انتظار المزايدة", "انتظار المزايده",
-                                "waiting bid", "waiting for bid")) {
-                            mustSeeWaitingBeforeNextBid = false;
-                            confirmRetryCount = 0;
-                            status("OCR زر المزايدة: «انتظار المزايدة» ✓ — دور الخصم");
-                            readAuctionSnapshot(false);
-                            return;
-                        }
-
-                        if (containsAny(label,
+                        boolean cropConfirm = containsAny(label,
                                 "تأكيد المزايدة", "تاكيد المزايده",
                                 "تأكيد مزايدة", "تاكيد مزايدة",
-                                "confirm bid", "confirm")) {
+                                "confirm bid", "confirm");
+
+                        boolean cropWaiting = containsAny(label,
+                                "انتظار المزايدة", "انتظار المزايده",
+                                "waiting bid", "waiting for bid");
+
+                        if (cropConfirm) {
 
                             if (awaitingConfirm) {
                                 status("OCR زر المزايدة: Confirm ✓ — أضغطه");
@@ -1935,6 +1939,14 @@ public class AuctionAccessibilityService extends AccessibilityService {
                                 status("OCR زر المزايدة: «تأكيد المزايدة» ✓ — دورنا");
                                 readAuctionSnapshot(true);
                             }
+                            return;
+                        }
+
+                        if (cropWaiting) {
+                            mustSeeWaitingBeforeNextBid = false;
+                            confirmRetryCount = 0;
+                            status("OCR زر المزايدة: «انتظار المزايدة» ✓ — دور الخصم");
+                            readAuctionSnapshot(false);
                             return;
                         }
 
