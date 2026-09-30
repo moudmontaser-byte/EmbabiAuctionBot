@@ -2115,6 +2115,42 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
     }
 
+    private void diagnosticTap(String key, String label) {
+        Rect bounds = Build.VERSION.SDK_INT >= 30
+                ? wm.getMaximumWindowMetrics().getBounds()
+                : new Rect(0, 0,
+                    getResources().getDisplayMetrics().widthPixels,
+                    getResources().getDisplayMetrics().heightPixels);
+
+        PointF p = Prefs.getTapPointPx(this, key, bounds.width(), bounds.height());
+        if (p == null) {
+            status(label + ": مفيش CAL محفوظ للنقطة دي");
+            return;
+        }
+
+        status(label + ": أضغط الآن عند X" + Math.round(p.x) + " Y" + Math.round(p.y));
+        tapSavedPoint(key, ok -> status(ok
+                ? label + " ✓ gesture completed"
+                : label + " ✕ gesture failed"));
+    }
+
+    private void diagnosticForceBid() {
+        status("FORCE TEST: + الآن");
+        tapSavedPoint("plus", plusOk -> {
+            if (!plusOk) {
+                status("FORCE TEST: فشل +");
+                return;
+            }
+
+            status("FORCE TEST: + ✓ — بعد ثانية Confirm");
+            h.postDelayed(() -> tapSavedPoint("confirm", confirmOk -> {
+                status(confirmOk
+                        ? "FORCE TEST ✓: + ثم Confirm اتنفذوا"
+                        : "FORCE TEST: + نجح لكن Confirm فشل");
+            }), 1000L);
+        });
+    }
+
     private void testOcr() {
         if (!Prefs.isCalibrated(this)) {
             status("TEST OCR: المعايرة ناقصة");
@@ -2274,6 +2310,29 @@ public class AuctionAccessibilityService extends AccessibilityService {
             addGap(controls, 4);
             controls.addView(test, new LinearLayout.LayoutParams(0, dp(42), 1f));
             box.addView(controls);
+
+            LinearLayout diagnostics = new LinearLayout(this);
+            diagnostics.setOrientation(LinearLayout.HORIZONTAL);
+            diagnostics.setPadding(0, dp(5), 0, 0);
+
+            Button testPlus = ovButton("TEST +", Color.rgb(38,92,62));
+            Button testConfirm = ovButton("TEST CFM", Color.rgb(38,92,62));
+            Button forceBid = ovButton("+ → CFM", Color.rgb(113,73,24));
+
+            testPlus.setTextSize(11);
+            testConfirm.setTextSize(11);
+            forceBid.setTextSize(11);
+
+            testPlus.setOnClickListener(v -> diagnosticTap("plus", "TEST +"));
+            testConfirm.setOnClickListener(v -> diagnosticTap("confirm", "TEST CFM"));
+            forceBid.setOnClickListener(v -> diagnosticForceBid());
+
+            diagnostics.addView(testPlus, new LinearLayout.LayoutParams(0, dp(42), 1f));
+            addGap(diagnostics, 4);
+            diagnostics.addView(testConfirm, new LinearLayout.LayoutParams(0, dp(42), 1f));
+            addGap(diagnostics, 4);
+            diagnostics.addView(forceBid, new LinearLayout.LayoutParams(0, dp(42), 1.15f));
+            box.addView(diagnostics);
         } else {
             ovStatus = ovText(shortStatus(), 9f, Color.rgb(205,219,241), true);
             ovStatus.setGravity(Gravity.CENTER);
