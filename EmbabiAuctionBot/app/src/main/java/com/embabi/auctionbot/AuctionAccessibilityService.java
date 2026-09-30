@@ -643,9 +643,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 status("وصلت صفحة الألعاب ✓ — أضغط السهم الرمادي");
                 tapGrayGamesArrow();
             } else {
-                long waited = Math.max(0, now - returnToMainClickedAt);
-                status("ضغطت الرئيسية ✓ — أنتظر صفحة الألعاب قبل السهم (" +
-                        (waited / 1000) + "s)");
+                scanPostMatchByOcr();
             }
             return;
         }
@@ -654,7 +652,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
             if (containsAny(all, "العب الان", "العب الآن", "play now")) {
                 finishReturnCycle(root);
             } else {
-                status("ضغطت سهم الألعاب ✓ — أنتظر الصفحة الرئيسية");
+                scanPostMatchByOcr();
             }
         }
     }
