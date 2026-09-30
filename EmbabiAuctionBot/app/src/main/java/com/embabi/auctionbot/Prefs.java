@@ -111,6 +111,25 @@ public final class Prefs {
     public static boolean hasRegion(Context c, String key) {
         return getRegion(c, key) != null;
     }
+    public static RectF getRegionOrDefault(Context c, String key) {
+        RectF saved = getRegion(c, key);
+        if (saved != null) return saved;
+
+        if ("rating".equals(key)) {
+            return new RectF(.10f, .28f, .43f, .60f);
+        }
+        if ("price".equals(key)) {
+            return new RectF(.28f, .70f, .72f, .88f);
+        }
+        if ("mine".equals(key)) {
+            return new RectF(.06f, .135f, .46f, .285f);
+        }
+        if ("opponent".equals(key)) {
+            return new RectF(.54f, .135f, .94f, .285f);
+        }
+        return null;
+    }
+
 
     public static boolean isCalibrated(Context c) {
         SharedPreferences p = sp(c);
