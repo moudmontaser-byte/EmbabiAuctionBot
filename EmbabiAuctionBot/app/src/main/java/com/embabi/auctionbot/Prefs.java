@@ -116,7 +116,16 @@ public final class Prefs {
             RectF r = getRegion(c, key);
             if (r == null || r.width() < .015f || r.height() < .012f) return false;
         }
-        return getPoint(c, "plus") != null && getPoint(c, "confirm") != null;
+
+        SharedPreferences p = sp(c);
+
+        // v12+: old normalized tap points are intentionally not enough.
+        // Force one fresh CAL so + and Confirm use the exact raw pixels touched
+        // on this phone/orientation.
+        boolean rawPlus = p.contains("px_x_plus") && p.contains("px_y_plus");
+        boolean rawConfirm = p.contains("px_x_confirm") && p.contains("px_y_confirm");
+
+        return rawPlus && rawConfirm;
     }
 
     public static void clearCalibration(Context c) {
