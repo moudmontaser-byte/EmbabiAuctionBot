@@ -1104,7 +1104,10 @@ public class AuctionAccessibilityService extends AccessibilityService {
             status(base + " • BID +1 • cap " + d.hardCap + "M");
             executeBid(snap);
         } else if (d.action == AuctionEngine.Action.PASS) {
-            status(base + " • PASS • " + d.reason);
+            status(base + " • PASS • " + d.reason + " • سأضغط تخطي اللاعب");
+            lastDecision = "SKIP " + rating + "<" + d.minRating;
+            refreshOverlay();
+            scheduleSkipPlayer();
         } else if (d.action == AuctionEngine.Action.SAFETY_PAUSE) {
             paused = true;
             Prefs.setBotPaused(this, true);
@@ -1165,13 +1168,88 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     // ---------- + then Confirm: verified two-step flow ----------
 
+    private void scheduleSkipPlayer() {
+        if (bidFlowInProgress || awaitingConfirm) return;
+
+        bidFlowInProgress = true;
+        lastDecision = "SKIP…";
+        refreshOverlay();
+
+        long wait = Math.max(0L, actionCooldownUntil - System.currentTimeMillis());
+        wait = Math.max(wait, 1000L);
+
+        h.postDelayed(() -> {
+            if (!running || paused) {
+                bidFlowInProgress = false;
+                return;
+            }
+            findAndClickSkipPlayer();
+        }, wait);
+    }
+
+    private void findAndClickSkipPlayer() {
+        captureBitmap(bmp -> {
+            if (bmp == null) {
+                bidFlowInProgress = false;
+                status("PASS لكن Screenshot فشل — لم أضغط شيئًا");
+                return;
+            }
+
+            recognizer.process(InputImage.fromBitmap(bmp, 0))
+                    .addOnSuccessListener(tx -> {
+                        Rect hit = findOcrTextRect(tx,
+                                "تخطي اللاعب", "تخطى اللاعب",
+                                "تخطي", "skip player", "skip");
+
+                        bmp.recycle();
+
+                        if (hit == null) {
+                            bidFlowInProgress = false;
+                            status("PASS ✓ لكن زر «تخطي اللاعب» غير ظاهر — أراقب فقط");
+                            lastDecision = "PASS";
+                            refreshOverlay();
+                            return;
+                        }
+
+                        lastDecision = "SKIP→";
+                        refreshOverlay();
+                        status("PASS ✓ — لقيت «تخطي اللاعب» وأضغطه الآن");
+
+                        dispatchTapPx(
+                                hit.centerX(),
+                                hit.centerY(),
+                                () -> {
+                                    bidFlowInProgress = false;
+                                    lastDecision = "SKIP✓";
+                                    refreshOverlay();
+                                    status("«تخطي اللاعب» اتضغط ✓ — أنتظر ثانية للشاشة الجديدة");
+                                    queueScan(ACTION_DEBOUNCE_MS + 120);
+                                },
+                                () -> {
+                                    bidFlowInProgress = false;
+                                    lastDecision = "SKIP✕";
+                                    refreshOverlay();
+                                    status("فشل ضغط «تخطي اللاعب» — بدون ضغط عشوائي");
+                                }
+                        );
+                    })
+                    .addOnFailureListener(e -> {
+                        bmp.recycle();
+                        bidFlowInProgress = false;
+                        status("PASS لكن OCR زر التخطي فشل — بدون ضغط");
+                    });
+        });
+    }
+
     private void executeBid(AuctionEngine.Snapshot snap) {
         if (bidFlowInProgress || awaitingConfirm || mustSeeWaitingBeforeNextBid) return;
         if (System.currentTimeMillis() < actionCooldownUntil) return;
 
         bidFlowInProgress = true;
         engine.markOwnBidStarted(snap.price);
-        status("BID ✓ — Physical tap على +");
+        lastDecision = "BID→+";
+        refreshOverlay();
+        status("BID ✓ — سأضغط + على النقطة المعايرة");
 
         clickPlusSmart(ok -> {
             bidFlowInProgress = false;
@@ -1185,6 +1263,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
             }
 
             awaitingConfirm = true;
+            lastDecision = "+✓ CFM?";
+            refreshOverlay();
             actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
             status("+ اتضغط ✓ — أنتظر ثانية ثم أتحقق من «تأكيد المزايدة»");
             queueScan(ACTION_DEBOUNCE_MS + 120);
@@ -1250,6 +1330,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
             awaitingConfirm = false;
             bidFlowInProgress = false;
             mustSeeWaitingBeforeNextBid = true;
+            lastDecision = "CFM✓";
+            refreshOverlay();
 
             actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
             status("Confirm اتضغط ✓ — أنتظر ثانية ثم «انتظار المزايدة»");
@@ -1471,35 +1553,64 @@ public class AuctionAccessibilityService extends AccessibilityService {
             cb.accept(null);
             return;
         }
+
         if (screenshotBusy) {
             cb.accept(null);
             return;
         }
 
         screenshotBusy = true;
-        try {
-            takeScreenshot(0, getMainExecutor(), new TakeScreenshotCallback() {
-                @Override public void onSuccess(ScreenshotResult result) {
-                    Bitmap copy = null;
-                    try {
-                        HardwareBuffer hb = result.getHardwareBuffer();
-                        Bitmap hw = Bitmap.wrapHardwareBuffer(hb, result.getColorSpace());
-                        if (hw != null) copy = hw.copy(Bitmap.Config.ARGB_8888, false);
-                        hb.close();
-                    } catch (Exception ignored) {}
-                    screenshotBusy = false;
-                    cb.accept(copy);
+
+        final boolean restoreOverlay =
+                floatingView != null && floatingView.getVisibility() == View.VISIBLE;
+
+        if (restoreOverlay) {
+            floatingView.setVisibility(View.INVISIBLE);
+        }
+
+        // Let the overlay disappear from the compositor before capturing.
+        h.postDelayed(() -> {
+            try {
+                takeScreenshot(0, getMainExecutor(), new TakeScreenshotCallback() {
+                    @Override public void onSuccess(ScreenshotResult result) {
+                        Bitmap copy = null;
+
+                        try {
+                            HardwareBuffer hb = result.getHardwareBuffer();
+                            Bitmap hw = Bitmap.wrapHardwareBuffer(hb, result.getColorSpace());
+                            if (hw != null) copy = hw.copy(Bitmap.Config.ARGB_8888, false);
+                            hb.close();
+                        } catch (Exception ignored) {}
+
+                        screenshotBusy = false;
+
+                        if (restoreOverlay && floatingView != null) {
+                            floatingView.setVisibility(View.VISIBLE);
+                        }
+
+                        cb.accept(copy);
+                    }
+
+                    @Override public void onFailure(int errorCode) {
+                        screenshotBusy = false;
+
+                        if (restoreOverlay && floatingView != null) {
+                            floatingView.setVisibility(View.VISIBLE);
+                        }
+
+                        cb.accept(null);
+                    }
+                });
+            } catch (Exception e) {
+                screenshotBusy = false;
+
+                if (restoreOverlay && floatingView != null) {
+                    floatingView.setVisibility(View.VISIBLE);
                 }
 
-                @Override public void onFailure(int errorCode) {
-                    screenshotBusy = false;
-                    cb.accept(null);
-                }
-            });
-        } catch (Exception e) {
-            screenshotBusy = false;
-            cb.accept(null);
-        }
+                cb.accept(null);
+            }
+        }, 140);
     }
 
     // ---------- Calibration: 4 OCR rectangles + + point + Confirm point ----------
@@ -1904,7 +2015,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         floatingView = box;
 
         int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        int compactWidth = Math.max(dp(136), Math.round(screenWidth * .34f));
+        int compactWidth = Math.max(dp(118), Math.round(screenWidth * .30f));
 
         floatingLp = new WindowManager.LayoutParams(
                 compactWidth, -2,
