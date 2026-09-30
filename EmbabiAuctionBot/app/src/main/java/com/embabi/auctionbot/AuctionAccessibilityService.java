@@ -2476,53 +2476,37 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void dispatchTapPx(float x, float y, Runnable completed, Runnable cancelled) {
-        if (System.currentTimeMillis() < actionCooldownUntil) {
-            if (cancelled != null) h.post(cancelled);
-            return;
+        Path p = new Path();
+        p.moveTo(x, y);
+        p.lineTo(x + 0.5f, y + 0.5f);
+
+        GestureDescription.StrokeDescription stroke =
+                new GestureDescription.StrokeDescription(p, 0, 90);
+        GestureDescription g =
+                new GestureDescription.Builder().addStroke(stroke).build();
+
+        boolean accepted;
+        try {
+            accepted = dispatchGesture(g, new GestureResultCallback() {
+                @Override public void onCompleted(GestureDescription gestureDescription) {
+                    super.onCompleted(gestureDescription);
+                    if (completed != null) h.post(completed);
+                }
+
+                @Override public void onCancelled(GestureDescription gestureDescription) {
+                    super.onCancelled(gestureDescription);
+                    if (cancelled != null) h.post(cancelled);
+                }
+            }, null);
+        } catch (Exception e) {
+            accepted = false;
         }
 
-        setOverlayPassThrough(true);
-        actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
-
-        h.postDelayed(() -> {
-            Path p = new Path();
-            p.moveTo(x, y);
-            p.lineTo(x + .5f, y + .5f);
-
-            GestureDescription.StrokeDescription stroke =
-                    new GestureDescription.StrokeDescription(p, 0, 120);
-
-            GestureDescription g =
-                    new GestureDescription.Builder().addStroke(stroke).build();
-
-            boolean accepted;
-
-            try {
-                accepted = dispatchGesture(g, new GestureResultCallback() {
-                    @Override public void onCompleted(GestureDescription gestureDescription) {
-                        super.onCompleted(gestureDescription);
-
-                        h.postDelayed(() -> {
-                            setOverlayPassThrough(false);
-                            if (completed != null) completed.run();
-                        }, 120);
-                    }
-
-                    @Override public void onCancelled(GestureDescription gestureDescription) {
-                        super.onCancelled(gestureDescription);
-                        setOverlayPassThrough(false);
-                        if (cancelled != null) h.post(cancelled);
-                    }
-                }, null);
-            } catch (Exception e) {
-                accepted = false;
-            }
-
-            if (!accepted) {
-                setOverlayPassThrough(false);
-                if (cancelled != null) h.post(cancelled);
-            }
-        }, 80);
+        if (accepted) {
+            actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
+        } else if (cancelled != null) {
+            h.post(cancelled);
+        }
     }
 
     private void setOverlayPassThrough(boolean passThrough) {
