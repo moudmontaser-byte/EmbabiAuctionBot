@@ -1507,80 +1507,77 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(5), dp(4), dp(5), dp(5));
+        box.setPadding(dp(4), dp(3), dp(4), dp(4));
         box.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        box.setBackground(round(Color.argb(226,7,18,32), Color.rgb(91,82,225), 12));
+        box.setBackground(round(Color.argb(216,7,18,32), Color.rgb(91,82,225), 11));
 
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
 
-        TextView title = ovText("◈ AUCTION", 10.5f, Color.WHITE, true);
+        TextView title = ovText("◈ AUCTION", 9.7f, Color.WHITE, true);
         title.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
-        TextView collapse = ovText(expanded ? "−" : "☰", 17, Color.rgb(160,186,255), true);
+
+        ovRunState = ovText("", 8.2f, Color.rgb(0,230,150), true);
+        ovRunState.setGravity(Gravity.CENTER);
+
+        TextView collapse = ovText(expanded ? "−" : "☰", 15, Color.rgb(160,186,255), true);
         collapse.setGravity(Gravity.CENTER);
-        TextView close = ovText("×", 18, Color.rgb(255,105,125), true);
+        TextView close = ovText("×", 16, Color.rgb(255,105,125), true);
         close.setGravity(Gravity.CENTER);
 
-        head.addView(title, new LinearLayout.LayoutParams(0, dp(25), 1));
-        head.addView(collapse, new LinearLayout.LayoutParams(dp(29), dp(25)));
-        head.addView(close, new LinearLayout.LayoutParams(dp(29), dp(25)));
+        head.addView(title, new LinearLayout.LayoutParams(0, dp(23), 1.0f));
+        head.addView(ovRunState, new LinearLayout.LayoutParams(0, dp(23), 1.25f));
+        head.addView(collapse, new LinearLayout.LayoutParams(dp(25), dp(23)));
+        head.addView(close, new LinearLayout.LayoutParams(dp(25), dp(23)));
         box.addView(head);
 
         if (expanded) {
-            ovRunState = ovText("", 8.5f, Color.rgb(0,230,150), true);
-            ovRunState.setMaxLines(1);
-            box.addView(ovRunState, new LinearLayout.LayoutParams(-1, dp(17)));
-
-            ovStatus = ovText(lastStatus, 8.5f, Color.rgb(207,219,239), false);
+            ovStatus = ovText(lastStatus, 7.8f, Color.rgb(207,219,239), false);
             ovStatus.setSingleLine(true);
             ovStatus.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            ovStatus.setPadding(0, 0, 0, dp(2));
-            box.addView(ovStatus, new LinearLayout.LayoutParams(-1, dp(20)));
+            box.addView(ovStatus, new LinearLayout.LayoutParams(-1, dp(18)));
 
-            LinearLayout row1 = new LinearLayout(this);
-            row1.setOrientation(LinearLayout.HORIZONTAL);
-            ovRound = chip("R" + currentRound() + "/5", Color.rgb(15,45,67));
-            ovRating = chip("OVR " + show(lastRating), Color.rgb(15,45,67));
-            ovPrice = chip(show(lastPrice) + "M", Color.rgb(15,45,67));
-            row1.addView(ovRound, new LinearLayout.LayoutParams(0, dp(26), 1));
-            addGap(row1, 3);
-            row1.addView(ovRating, new LinearLayout.LayoutParams(0, dp(26), 1));
-            addGap(row1, 3);
-            row1.addView(ovPrice, new LinearLayout.LayoutParams(0, dp(26), 1));
-            box.addView(row1);
+            LinearLayout metrics = new LinearLayout(this);
+            metrics.setOrientation(LinearLayout.HORIZONTAL);
+            metrics.setPadding(0, dp(2), 0, 0);
 
-            LinearLayout row2 = new LinearLayout(this);
-            row2.setOrientation(LinearLayout.HORIZONTAL);
-            row2.setPadding(0, dp(3), 0, 0);
-            ovBudgets = chip("Y" + show(lastMine) + " • O" + show(lastOpp), Color.rgb(15,45,67));
+            ovRating = chip("O" + show(lastRating), Color.rgb(15,45,67));
+            ovPrice = chip("€" + show(lastPrice), Color.rgb(15,45,67));
+            ovBudgets = chip("Y" + show(lastMine) + "/O" + show(lastOpp), Color.rgb(15,45,67));
             ovDecision = chip(lastDecision, Color.rgb(15,45,67));
-            row2.addView(ovBudgets, new LinearLayout.LayoutParams(0, dp(26), 2));
-            addGap(row2, 3);
-            row2.addView(ovDecision, new LinearLayout.LayoutParams(0, dp(26), 1));
-            box.addView(row2);
+
+            metrics.addView(ovRating, new LinearLayout.LayoutParams(0, dp(24), 1));
+            addGap(metrics, 2);
+            metrics.addView(ovPrice, new LinearLayout.LayoutParams(0, dp(24), 1));
+            addGap(metrics, 2);
+            metrics.addView(ovBudgets, new LinearLayout.LayoutParams(0, dp(24), 1.55f));
+            addGap(metrics, 2);
+            metrics.addView(ovDecision, new LinearLayout.LayoutParams(0, dp(24), 1.15f));
+            box.addView(metrics);
 
             LinearLayout players = new LinearLayout(this);
             players.setOrientation(LinearLayout.HORIZONTAL);
-            players.setPadding(0, dp(4), 0, 0);
-            String[] pNames = {"GK", "DEF", "C1", "C2", "ST"};
+            players.setPadding(0, dp(3), 0, 0);
+
+            String[] pNames = {"GK", "DF", "C1", "C2", "ST"};
             int activeSlot = Math.max(0, Math.min(4, currentRound() - 1));
 
             for (int i = 0; i < 5; i++) {
                 String text = pNames[i] + "\n" + Prefs.getMinRating(this, i);
                 int fill = i == activeSlot ? Color.rgb(78,58,180) : Color.rgb(15,45,67);
                 TextView p = chip(text, fill);
-                p.setTextSize(8.2f);
+                p.setTextSize(7.8f);
                 p.setGravity(Gravity.CENTER);
                 ovPlayerMins[i] = p;
-                players.addView(p, new LinearLayout.LayoutParams(0, dp(31), 1));
+                players.addView(p, new LinearLayout.LayoutParams(0, dp(29), 1));
                 if (i < 4) addGap(players, 2);
             }
             box.addView(players);
 
             LinearLayout controls = new LinearLayout(this);
             controls.setOrientation(LinearLayout.HORIZONTAL);
-            controls.setPadding(0, dp(4), 0, 0);
+            controls.setPadding(0, dp(3), 0, 0);
 
             Button start = ovButton("▶", Color.rgb(0,191,120));
             Button pause = ovButton("Ⅱ", Color.rgb(26,55,82));
@@ -1594,25 +1591,21 @@ public class AuctionAccessibilityService extends AccessibilityService {
             cal.setOnClickListener(v -> startCalibration());
             test.setOnClickListener(v -> testOcr());
 
-            controls.addView(start, new LinearLayout.LayoutParams(0, dp(29), 1));
+            controls.addView(start, new LinearLayout.LayoutParams(0, dp(27), 1));
             addGap(controls, 2);
-            controls.addView(pause, new LinearLayout.LayoutParams(0, dp(29), 1));
+            controls.addView(pause, new LinearLayout.LayoutParams(0, dp(27), 1));
             addGap(controls, 2);
-            controls.addView(stop, new LinearLayout.LayoutParams(0, dp(29), 1));
+            controls.addView(stop, new LinearLayout.LayoutParams(0, dp(27), 1));
             addGap(controls, 2);
-            controls.addView(cal, new LinearLayout.LayoutParams(0, dp(29), 1));
+            controls.addView(cal, new LinearLayout.LayoutParams(0, dp(27), 1));
             addGap(controls, 2);
-            controls.addView(test, new LinearLayout.LayoutParams(0, dp(29), 1));
+            controls.addView(test, new LinearLayout.LayoutParams(0, dp(27), 1));
             box.addView(controls);
-
-            ovRepeat = ovText(repeatLabel(), 8.2f, Color.rgb(166,185,210), true);
-            ovRepeat.setGravity(Gravity.CENTER);
-            box.addView(ovRepeat, new LinearLayout.LayoutParams(-1, dp(16)));
         } else {
-            ovStatus = ovText(shortStatus(), 9.5f, Color.rgb(205,219,241), true);
+            ovStatus = ovText(shortStatus(), 8.8f, Color.rgb(205,219,241), true);
             ovStatus.setGravity(Gravity.CENTER);
             ovStatus.setSingleLine(true);
-            box.addView(ovStatus, new LinearLayout.LayoutParams(-1, dp(25)));
+            box.addView(ovStatus, new LinearLayout.LayoutParams(-1, dp(22)));
         }
 
         collapse.setOnClickListener(v -> showFloatingOverlay(!overlayExpanded));
@@ -1623,8 +1616,12 @@ public class AuctionAccessibilityService extends AccessibilityService {
         });
 
         floatingView = box;
+
+        int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        int compactWidth = Math.max(dp(150), Math.round(screenWidth * .50f));
+
         floatingLp = new WindowManager.LayoutParams(
-                dp(218), -2,
+                compactWidth, -2,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
                         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
@@ -1632,7 +1629,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         floatingLp.gravity = Gravity.TOP | Gravity.START;
         floatingLp.x = dp(4);
-        floatingLp.y = dp(68);
+        floatingLp.y = dp(58);
 
         final float[] touch = new float[4];
         title.setOnTouchListener((v, e) -> {
@@ -1678,30 +1675,37 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private void refreshOverlay() {
         int round = currentRound();
+
         if (ovRunState != null) {
-            ovRunState.setText((!running ? "● STOP" : paused ? "● PAUSE" : "● RUN") +
-                    " • " + repeatLabel() +
-                    " • G" + matchesCompleted);
+            String state = !running ? "STOP" : paused ? "PAUSE" : "RUN";
+            ovRunState.setText("● " + state + " R" + round + " • " + repeatShort());
             ovRunState.setTextColor(!running ? Color.rgb(255,105,125) :
                     paused ? Color.rgb(255,190,80) : Color.rgb(0,230,150));
         }
-        if (ovStatus != null) ovStatus.setText(lastStatus);
-        if (ovRound != null) ovRound.setText("R" + round + "/5");
-        if (ovRating != null) ovRating.setText("OVR " + show(lastRating));
-        if (ovPrice != null) ovPrice.setText("Price " + show(lastPrice) + "M");
-        if (ovBudgets != null) ovBudgets.setText("You " + show(lastMine) + "M • Opp " + show(lastOpp) + "M");
+
+        if (ovStatus != null) ovStatus.setText(overlayExpanded ? lastStatus : shortStatus());
+        if (ovRating != null) ovRating.setText("O" + show(lastRating));
+        if (ovPrice != null) ovPrice.setText("€" + show(lastPrice));
+        if (ovBudgets != null) ovBudgets.setText("Y" + show(lastMine) + "/O" + show(lastOpp));
         if (ovDecision != null) ovDecision.setText(lastDecision == null ? "—" : lastDecision);
+
         for (int i = 0; i < 5; i++) {
             if (ovPlayerMins[i] != null) {
-                String[] names = {"GK", "DEF", "CM1", "CM2", "ST"};
+                String[] names = {"GK", "DF", "C1", "C2", "ST"};
                 ovPlayerMins[i].setText(names[i] + "\n" + Prefs.getMinRating(this, i));
                 int fill = (i == Math.max(0, round - 1))
                         ? Color.rgb(78,58,180)
                         : Color.rgb(15,45,67);
-                ovPlayerMins[i].setBackground(round(fill, Color.rgb(45,73,103), 9));
+                ovPlayerMins[i].setBackground(round(fill, Color.rgb(45,73,103), 8));
             }
         }
-        if (ovRepeat != null) ovRepeat.setText(repeatLabel());
+    }
+
+    private String repeatShort() {
+        String mode = Prefs.repeatMode(this);
+        if ("count".equals(mode)) return "#" + Prefs.repeatCount(this);
+        if ("time".equals(mode)) return Prefs.repeatMinutes(this) + "m";
+        return "∞";
     }
 
     private int currentRound() {
