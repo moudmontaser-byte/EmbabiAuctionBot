@@ -76,9 +76,10 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private Integer lastRating = null, lastPrice = null, lastMine = null, lastOpp = null;
     private String targetPackage = null;
 
-    // Post-game state machine. Every transition is screen-driven:
-    // 0 normal game, 1 find Start Simulation, 2 find View lineups/results,
-    // 3 find Return/Main, 4 wait for Games hub, 5 wait for actual home.
+    // Post-game state machine copied from the actual recorded flow:
+    // 0 auction, 1 Coaches -> View Lineups, 2 Final Lineups -> Start Simulation,
+    // 3 Simulation -> View Results, 4 Summary -> scroll/find Return Home,
+    // 5 wait for Games hub, 6 wait for actual Home.
     private int postMatchStage = 0;
     private int postMatchSwipeAttempts = 0;
     private int grayArrowAttempts = 0;
@@ -601,16 +602,15 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private void handlePostMatch(AccessibilityNodeInfo root, String all) {
         long now = System.currentTimeMillis();
 
+        // 1) Coaches screen -> View Lineups.
         if (postMatchStage == 1) {
-            AccessibilityNodeInfo sim = findVisibleTextAny(root,
-                    "بدء المحاكاه", "بدء المحاكاة",
-                    "ابدأ المحاكاه", "ابدأ المحاكاة",
-                    "محاكاه المباراه", "محاكاة المباراة",
-                    "simulate match", "start simulation");
+            AccessibilityNodeInfo lineups = findVisibleTextAny(root,
+                    "عرض التشكيلات", "مشاهدة التشكيلات",
+                    "view lineups", "lineups");
 
-            if (sim != null) {
-                status("لقيت «بدء المحاكاة» ✓ — أضغطه");
-                if (clickNode(sim)) {
+            if (lineups != null) {
+                status("شاشة المدربين ✓ — أضغط «عرض التشكيلات»");
+                if (clickNode(lineups)) {
                     postMatchStage = 2;
                     postMatchSwipeAttempts = 0;
                     postActionNotBefore = now + ACTION_DEBOUNCE_MS;
@@ -619,16 +619,16 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 return;
             }
 
-            AccessibilityNodeInfo lineups = findVisibleTextAny(root,
-                    "عرض التشكيلات", "عرض النتائج",
-                    "عرض النتيجه", "عرض النتيجة", "التشكيلات",
-                    "view lineups", "view results");
+            // Some builds may skip directly to final lineups.
+            AccessibilityNodeInfo sim = findVisibleTextAny(root,
+                    "بدء المحاكاه", "بدء المحاكاة",
+                    "ابدأ المحاكاه", "ابدأ المحاكاة",
+                    "start simulation", "simulate match");
 
-            if (lineups != null) {
-                status("النتيجة جاهزة ✓ — أضغط عرض التشكيلات/النتائج");
-                if (clickNode(lineups)) {
+            if (sim != null) {
+                status("التشكيلات النهائية ظاهرة ✓ — أضغط «بدء المحاكاة»");
+                if (clickNode(sim)) {
                     postMatchStage = 3;
-                    postMatchSwipeAttempts = 0;
                     postActionNotBefore = now + ACTION_DEBOUNCE_MS;
                     queueScan(ACTION_DEBOUNCE_MS + 120);
                 }
@@ -639,15 +639,16 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
+        // 2) Final lineups -> Start Simulation.
         if (postMatchStage == 2) {
-            AccessibilityNodeInfo lineups = findVisibleTextAny(root,
-                    "عرض التشكيلات", "عرض النتائج",
-                    "عرض النتيجه", "عرض النتيجة", "التشكيلات",
-                    "view lineups", "view results");
+            AccessibilityNodeInfo sim = findVisibleTextAny(root,
+                    "بدء المحاكاه", "بدء المحاكاة",
+                    "ابدأ المحاكاه", "ابدأ المحاكاة",
+                    "start simulation", "simulate match");
 
-            if (lineups != null) {
-                status("المحاكاة خلصت ✓ — أضغط عرض التشكيلات/النتائج");
-                if (clickNode(lineups)) {
+            if (sim != null) {
+                status("لقيت «بدء المحاكاة» ✓ — أضغطه ثم أنتظر الشاشة الجديدة");
+                if (clickNode(sim)) {
                     postMatchStage = 3;
                     postMatchSwipeAttempts = 0;
                     postActionNotBefore = now + ACTION_DEBOUNCE_MS;
@@ -660,7 +661,30 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
+        // 3) Simulation running. Do NOT scroll. Wait for View Results.
         if (postMatchStage == 3) {
+            AccessibilityNodeInfo results = findVisibleTextAny(root,
+                    "عرض النتائج", "عرض النتيجه", "عرض النتيجة",
+                    "view results", "results");
+
+            if (results != null) {
+                status("المحاكاة انتهت ✓ — أضغط «عرض النتائج»");
+                if (clickNode(results)) {
+                    postMatchStage = 4;
+                    postMatchSwipeAttempts = 0;
+                    postActionNotBefore = now + ACTION_DEBOUNCE_MS;
+                    queueScan(ACTION_DEBOUNCE_MS + 120);
+                }
+                return;
+            }
+
+            status("المحاكاة جارية — أنتظر «عرض النتائج» بدون Scroll");
+            scanPostMatchByOcr();
+            return;
+        }
+
+        // 4) Match summary -> scroll until Return Home appears.
+        if (postMatchStage == 4) {
             AccessibilityNodeInfo home = findVisibleTextAny(root,
                     "العوده للرئيسيه", "العودة للرئيسية",
                     "العوده للصفحه الرئيسيه", "العودة للصفحة الرئيسية",
@@ -672,7 +696,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 status("لقيت «العودة للرئيسية» ✓ — أضغطها");
                 if (clickNode(home)) {
                     onMatchCompleted();
-                    postMatchStage = 4;
+                    postMatchStage = 5;
                     returnToMainClickedAt = now;
                     postMatchSwipeAttempts = 0;
                     postActionNotBefore = now + ACTION_DEBOUNCE_MS;
@@ -685,7 +709,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
-        if (postMatchStage == 4) {
+        // 5) After Return Home: either actual Home is ready or Games hub is visible.
+        if (postMatchStage == 5) {
             if (containsAny(all, "العب الان", "العب الآن", "play now")) {
                 finishReturnCycle(root);
                 return;
@@ -700,7 +725,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
-        if (postMatchStage == 5) {
+        // 6) Gray arrow was pressed. Wait until actual Home appears.
+        if (postMatchStage == 6) {
             if (containsAny(all, "العب الان", "العب الآن", "play now")) {
                 finishReturnCycle(root);
             } else {
@@ -722,90 +748,120 @@ public class AuctionAccessibilityService extends AccessibilityService {
                     .addOnSuccessListener(tx -> {
                         Rect hit = null;
 
+                        // 1) Coaches -> View Lineups.
                         if (postMatchStage == 1) {
                             hit = findOcrTextRect(tx,
-                                    "بدء المحاكاه", "بدء المحاكاة",
-                                    "ابدأ المحاكاه", "ابدأ المحاكاة",
-                                    "محاكاه المباراه", "محاكاة المباراة",
-                                    "simulate match", "start simulation");
+                                    "عرض التشكيلات", "مشاهدة التشكيلات",
+                                    "view lineups", "lineups");
 
                             if (hit != null) {
                                 postMatchStage = 2;
                                 postMatchSwipeAttempts = 0;
                                 Rect target = hit;
                                 bmp.recycle();
-                                status("OCR لقى «بدء المحاكاة» ✓ — أضغطه");
+                                status("OCR: لقيت «عرض التشكيلات» ✓ — أضغطه");
                                 dispatchTapPx(target.centerX(), target.centerY(),
                                         () -> queueScan(ACTION_DEBOUNCE_MS + 120),
                                         () -> {
                                             postMatchStage = 1;
+                                            status("فشل ضغط عرض التشكيلات — سأعيد البحث");
+                                        });
+                                return;
+                            }
+
+                            hit = findOcrTextRect(tx,
+                                    "بدء المحاكاه", "بدء المحاكاة",
+                                    "ابدأ المحاكاه", "ابدأ المحاكاة",
+                                    "start simulation", "simulate match");
+
+                            if (hit != null) {
+                                postMatchStage = 3;
+                                Rect target = hit;
+                                bmp.recycle();
+                                status("OCR: التشكيلات النهائية ظاهرة ✓ — أضغط بدء المحاكاة");
+                                dispatchTapPx(target.centerX(), target.centerY(),
+                                        () -> queueScan(ACTION_DEBOUNCE_MS + 120),
+                                        () -> {
+                                            postMatchStage = 2;
                                             status("فشل ضغط بدء المحاكاة — سأعيد البحث");
                                         });
                                 return;
                             }
 
-                            // Some versions may already show results without a simulation button.
-                            hit = findOcrTextRect(tx,
-                                    "عرض التشكيلات", "عرض النتائج",
-                                    "عرض النتيجة", "عرض النتيجه",
-                                    "التشكيلات", "view lineups", "view results");
-
-                            if (hit != null) {
-                                postMatchStage = 3;
-                                postMatchSwipeAttempts = 0;
-                                Rect target = hit;
-                                bmp.recycle();
-                                status("OCR: النتيجة جاهزة ✓ — أضغط عرض التشكيلات");
-                                dispatchTapPx(target.centerX(), target.centerY(),
-                                        () -> queueScan(ACTION_DEBOUNCE_MS + 120),
-                                        () -> {
-                                            postMatchStage = 1;
-                                            status("فشل ضغط عرض التشكيلات — سأعيد البحث");
-                                        });
-                                return;
-                            }
+                            bmp.recycle();
+                            status("أنتظر ظهور «عرض التشكيلات» — بدون Scroll عشوائي");
+                            return;
                         }
 
+                        // 2) Final lineups -> Start Simulation.
                         if (postMatchStage == 2) {
                             hit = findOcrTextRect(tx,
-                                    "عرض التشكيلات", "عرض النتائج",
-                                    "عرض النتيجة", "عرض النتيجه",
-                                    "التشكيلات", "view lineups", "view results");
+                                    "بدء المحاكاه", "بدء المحاكاة",
+                                    "ابدأ المحاكاه", "ابدأ المحاكاة",
+                                    "start simulation", "simulate match");
 
                             if (hit != null) {
                                 postMatchStage = 3;
                                 postMatchSwipeAttempts = 0;
                                 Rect target = hit;
                                 bmp.recycle();
-                                status("OCR: المحاكاة خلصت ✓ — أضغط عرض التشكيلات/النتائج");
+                                status("OCR: لقيت «بدء المحاكاة» ✓ — أضغطه");
                                 dispatchTapPx(target.centerX(), target.centerY(),
                                         () -> queueScan(ACTION_DEBOUNCE_MS + 120),
                                         () -> {
                                             postMatchStage = 2;
-                                            status("فشل ضغط عرض التشكيلات — سأعيد البحث");
+                                            status("فشل ضغط بدء المحاكاة — سأعيد المحاولة");
                                         });
                                 return;
                             }
 
-                            // If Start Simulation is still visible, the previous tap did not register.
+                            // If the old View Lineups screen is still there, retry it.
                             hit = findOcrTextRect(tx,
-                                    "بدء المحاكاه", "بدء المحاكاة",
-                                    "ابدأ المحاكاه", "ابدأ المحاكاة",
-                                    "محاكاه المباراه", "محاكاة المباراة",
-                                    "simulate match", "start simulation");
-
+                                    "عرض التشكيلات", "مشاهدة التشكيلات",
+                                    "view lineups", "lineups");
                             if (hit != null) {
                                 Rect target = hit;
                                 bmp.recycle();
-                                status("زر بدء المحاكاة ما زال ظاهر — أعيد الضغط");
+                                status("«عرض التشكيلات» ما زال ظاهر — أعيد الضغط");
                                 dispatchTapPx(target.centerX(), target.centerY(),
                                         () -> queueScan(ACTION_DEBOUNCE_MS + 120),
-                                        () -> status("فشل إعادة ضغط بدء المحاكاة"));
+                                        () -> status("فشل إعادة ضغط عرض التشكيلات"));
                                 return;
                             }
+
+                            bmp.recycle();
+                            status("أنتظر ثانية لظهور «بدء المحاكاة»");
+                            return;
                         }
 
+                        // 3) Simulation: absolutely no scrolling. Wait for View Results.
                         if (postMatchStage == 3) {
+                            hit = findOcrTextRect(tx,
+                                    "عرض النتائج", "عرض النتيجه", "عرض النتيجة",
+                                    "view results", "results");
+
+                            if (hit != null) {
+                                postMatchStage = 4;
+                                postMatchSwipeAttempts = 0;
+                                Rect target = hit;
+                                bmp.recycle();
+                                status("OCR: المحاكاة انتهت ✓ — أضغط «عرض النتائج»");
+                                dispatchTapPx(target.centerX(), target.centerY(),
+                                        () -> queueScan(ACTION_DEBOUNCE_MS + 120),
+                                        () -> {
+                                            postMatchStage = 3;
+                                            status("فشل ضغط عرض النتائج — سأعيد المحاولة");
+                                        });
+                                return;
+                            }
+
+                            bmp.recycle();
+                            status("المحاكاة جارية — أنتظر «عرض النتائج»");
+                            return;
+                        }
+
+                        // 4) Summary: now scrolling is correct.
+                        if (postMatchStage == 4) {
                             hit = findOcrTextRect(tx,
                                     "العودة للرئيسية", "العوده للرئيسيه",
                                     "العودة للصفحة الرئيسية", "العوده للصفحه الرئيسيه",
@@ -813,24 +869,38 @@ public class AuctionAccessibilityService extends AccessibilityService {
                                     "return to main", "return home", "main menu");
 
                             if (hit != null) {
-                                postMatchStage = 4;
+                                postMatchStage = 5;
                                 postMatchSwipeAttempts = 0;
                                 returnToMainClickedAt = System.currentTimeMillis();
                                 onMatchCompleted();
                                 Rect target = hit;
                                 bmp.recycle();
-                                status("OCR لقى «العودة للرئيسية» ✓ — أضغطها");
+                                status("OCR: لقيت «العودة للرئيسية» ✓ — أضغطها");
                                 dispatchTapPx(target.centerX(), target.centerY(),
                                         () -> queueScan(ACTION_DEBOUNCE_MS + 120),
                                         () -> {
-                                            postMatchStage = 3;
+                                            postMatchStage = 4;
                                             status("فشل ضغط العودة للرئيسية — سأعيد البحث");
                                         });
                                 return;
                             }
+
+                            bmp.recycle();
+                            postMatchSwipeAttempts++;
+
+                            if (postMatchSwipeAttempts > 45) {
+                                paused = true;
+                                Prefs.setBotPaused(AuctionAccessibilityService.this, true);
+                                status("لم أجد العودة للرئيسية بعد 45 Scroll — PAUSE");
+                            } else {
+                                status("ملخص المباراة — Scroll لتحت #" + postMatchSwipeAttempts);
+                                swipePageDown();
+                            }
+                            return;
                         }
 
-                        if (postMatchStage == 4 || postMatchStage == 5) {
+                        // 5/6) Return path back to actual Home.
+                        if (postMatchStage == 5 || postMatchStage == 6) {
                             hit = findOcrTextRect(tx,
                                     "العب الآن", "العب الان", "play now");
 
@@ -857,30 +927,19 @@ public class AuctionAccessibilityService extends AccessibilityService {
                             Rect games = findOcrTextRect(tx,
                                     "المزاد", "auction", "الألعاب", "الالعاب", "games");
 
-                            if (games != null && postMatchStage == 4) {
+                            if (games != null && postMatchStage == 5) {
                                 bmp.recycle();
-                                status("OCR أكد صفحة الألعاب ✓ — أضغط السهم الرمادي");
+                                status("OCR: صفحة الألعاب ✓ — أضغط السهم الرمادي");
                                 tapGrayGamesArrow();
                                 return;
                             }
+
+                            bmp.recycle();
+                            status("أنتظر الصفحة التالية…");
+                            return;
                         }
 
                         bmp.recycle();
-
-                        if (postMatchStage >= 1 && postMatchStage <= 3) {
-                            postMatchSwipeAttempts++;
-
-                            if (postMatchSwipeAttempts > 45) {
-                                paused = true;
-                                Prefs.setBotPaused(AuctionAccessibilityService.this, true);
-                                status("بحثت 45 مرة ومش لاقي الكلمة المطلوبة — PAUSE");
-                            } else {
-                                status("الكلمة المطلوبة مش ظاهرة — Scroll لتحت #" + postMatchSwipeAttempts);
-                                swipePageDown();
-                            }
-                        } else {
-                            status("أنتظر الصفحة التالية…");
-                        }
                     })
                     .addOnFailureListener(e -> {
                         bmp.recycle();
@@ -2862,11 +2921,11 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private void tapGrayGamesArrow() {
         dispatchTapNormalized(.890f, .078f,
                 () -> {
-                    postMatchStage = 5;
+                    postMatchStage = 6;
                     status("السهم الرمادي اتضغط ✓ — أتحقق من الصفحة الرئيسية");
                 },
                 () -> {
-                    postMatchStage = 4;
+                    postMatchStage = 5;
                     status("Gesture السهم اتلغى — سأعيد التحقق من صفحة الألعاب");
                 });
     }
