@@ -1344,7 +1344,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
 
         boolean valid = rating != null && rating >= 50 && rating <= 99 &&
-                price != null && price >= 0 && price <= 100 &&
+                price != null && price >= 1 && price <= 100 &&
                 mine != null && mine >= 0 && mine <= 100 &&
                 opp != null && opp >= 0 && opp <= 100;
 
@@ -2038,6 +2038,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
         h.removeCallbacks(monitor);
         removeFloatingOverlay();
         removeCalibration();
+
+        // Starting CAL means starting from zero. Never keep old OCR boxes alive.
+        Prefs.clearCalibration(this);
         calibrationStep = 0;
         showCalibrationStep();
     }
@@ -2142,10 +2145,11 @@ public class AuctionAccessibilityService extends AccessibilityService {
         calibrationStep++;
 
         if (calibrationStep > 5) {
+            Prefs.markCalibrationComplete(this);
             removeCalibration();
             showFloatingOverlay(true);
             status(Prefs.isCalibrated(this)
-                    ? "المعايرة READY ✓ — شغّل TEST OCR ثم START"
+                    ? "CAL كامل 6/6 ✓ — شغّل TEST OCR ثم START"
                     : "المعايرة غير مكتملة — أعد CAL");
         } else {
             showCalibrationStep();
@@ -2884,7 +2888,22 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private boolean clickNode(AccessibilityNodeInfo n) {
         if (n == null) return false;
         if (System.currentTimeMillis() < actionCooldownUntil) return false;
+
+        // Real screen tap first. WebView ACTION_CLICK often returns true
+        // without actually pressing the rendered button.
         AccessibilityNodeInfo cur = n;
+        for (int i = 0; i < 7 && cur != null; i++, cur = cur.getParent()) {
+            Rect r = new Rect();
+            cur.getBoundsInScreen(r);
+
+            if (!r.isEmpty() && nodeOnScreen(cur) && cur.isEnabled()) {
+                dispatchTapPx(r.centerX(), r.centerY(), null, null);
+                return true;
+            }
+        }
+
+        // Last fallback only if no visible bounds are usable.
+        cur = n;
         for (int i = 0; i < 7 && cur != null; i++, cur = cur.getParent()) {
             if (cur.isClickable() && cur.isEnabled()) {
                 try {
@@ -2894,13 +2913,6 @@ public class AuctionAccessibilityService extends AccessibilityService {
                     }
                 } catch (Exception ignored) {}
             }
-        }
-
-        Rect r = new Rect();
-        n.getBoundsInScreen(r);
-        if (!r.isEmpty() && nodeOnScreen(n)) {
-            dispatchTapPx(r.centerX(), r.centerY(), null, null);
-            return true;
         }
         return false;
     }
