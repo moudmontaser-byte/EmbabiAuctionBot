@@ -10,8 +10,8 @@ android {
         applicationId "com.embabi.auctionbot"
         minSdk 30
         targetSdk 35
-        versionCode 110
-        versionName "11.0-hiddenplayer-tap-fix"
+        versionCode 120
+        versionName "12.0-root-auction-fix"
     }
 
     compileOptions {
