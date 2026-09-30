@@ -1943,8 +1943,11 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 return;
             }
 
-            status("لون زر المزايدة غير حاسم — أفحص النص داخل نفس المنطقة");
-            verifyTurnLabelByOcr();
+            // During WebView transitions/loading the button is neither clearly green
+            // nor clearly gray. Do not run another OCR layer and do not guess the turn.
+            // Hidden Player simply waited for the next stable frame; do the same here.
+            status("زر المزايدة في حالة انتقال/تحميل — أنتظر الفريم التالي");
+            queueScan(500);
         });
     }
 
