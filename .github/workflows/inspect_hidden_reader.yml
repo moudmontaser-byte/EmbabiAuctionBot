@@ -1,0 +1,23 @@
+name: Inspect HiddenPlayer reader exact
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/inspect_hidden_reader.yml'
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect
+        shell: bash
+        run: |
+          rm -rf /tmp/legacy && mkdir -p /tmp/legacy
+          unzip -q EmbabiAuctionBot_V0.1_CloudBuild.zip -d /tmp/legacy
+          F=/tmp/legacy/HiddenPlayerBot_v10/app/src/main/java/com/embabi/hiddenplayer/HiddenPlayerAccessibilityService.java
+          echo '=== TOP ==='
+          sed -n '1,240p' "$F"
+          echo '=== OCR/SCREEN/SCROLL ==='
+          grep -n -E "takeScreenshot|TextRecognition|recognizer|OCR|scan|scroll|swipe|capture|findVisible|collectText|dispatchGesture|MediaProjection|performGlobalAction" "$F" | head -240
+          echo '=== CORE ==='
+          sed -n '240,620p' "$F"
