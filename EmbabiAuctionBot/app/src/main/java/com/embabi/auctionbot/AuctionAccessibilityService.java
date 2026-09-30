@@ -2182,10 +2182,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
         removeFloatingOverlay();
         removeCalibration();
 
-        // v16+: the four numeric fields are read automatically from the screen.
-        // CAL only stores the two exact physical buttons: + then Confirm.
+        // v18: no guessed coordinates. The user defines the fixed zones once.
         Prefs.clearCalibration(this);
-        calibrationStep = 4;
+        calibrationStep = 0;
         showCalibrationStep();
     }
 
@@ -2215,7 +2214,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         bottom.setBackgroundColor(Color.argb(230, 5, 14, 27));
 
         Button cancel = calibrationButton("إلغاء", Color.rgb(70,35,48));
-        calibrationSave = calibrationButton(calibrationStep < 4 ? "حفظ / التالي ✓" : "المس الزر على الشاشة", Color.rgb(31,149,255));
+        calibrationSave = calibrationButton(calibrationStep < 5 ? "حفظ / التالي ✓" : "المس الزر على الشاشة", Color.rgb(31,149,255));
 
         cancel.setOnClickListener(v -> {
             removeCalibration();
@@ -2224,13 +2223,13 @@ public class AuctionAccessibilityService extends AccessibilityService {
         });
 
         calibrationSave.setOnClickListener(v -> {
-            if (calibrationStep >= 4) return;
+            if (calibrationStep >= 5) return;
             RectF n = calibrationView.getNormalizedSelection();
             if (n == null || n.width() < .015f || n.height() < .012f) {
                 Toast.makeText(this, "ارسم مربعًا واضحًا حول الرقم فقط", Toast.LENGTH_SHORT).show();
                 return;
             }
-            String key = new String[]{"rating","price","mine","opponent"}[calibrationStep];
+            String key = new String[]{"rating","price","mine","opponent","turn"}[calibrationStep];
             Prefs.saveRegion(this, key, n);
             calibrationStep++;
             showCalibrationStep();
@@ -2264,38 +2263,52 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private String calibrationLabel() {
-        if (calibrationStep == 4) {
-            return "1/2 — المس منتصف زر + مرة واحدة";
+        switch (calibrationStep) {
+            case 0: return "1/8 — ارسم مربع صغير حول رقم تقييم اللاعب فقط";
+            case 1: return "2/8 — ارسم مربع صغير حول سعر المزايدة الحالي فقط";
+            case 2: return "3/8 — ارسم مربع صغير حول ميزانيتك فقط";
+            case 3: return "4/8 — ارسم مربع صغير حول ميزانية الخصم فقط";
+            case 4: return "5/8 — ارسم مربع حول زر «تأكيد/انتظار المزايدة» بالكامل";
+            case 5: return "6/8 — المس منتصف زر + مرة واحدة";
+            case 6: return "7/8 — المس منتصف زر تأكيد المزايدة مرة واحدة";
+            default: return "8/8 — المس منتصف زر تخطي اللاعب مرة واحدة";
         }
-        return "2/2 — المس منتصف زر تأكيد المزايدة مرة واحدة";
     }
 
 
     private void onCalibrationPoint(float x, float y) {
-        if (calibrationStep < 4 || calibrationStep > 5) return;
+        if (calibrationStep < 5 || calibrationStep > 7) return;
+
         Rect bounds = Build.VERSION.SDK_INT >= 30
                 ? wm.getMaximumWindowMetrics().getBounds()
                 : new Rect(0, 0,
                     getResources().getDisplayMetrics().widthPixels,
                     getResources().getDisplayMetrics().heightPixels);
-        String key = calibrationStep == 4 ? "plus" : "confirm";
+
+        String key = calibrationStep == 5 ? "plus"
+                : calibrationStep == 6 ? "confirm"
+                : "skip";
+
         Prefs.savePoint(this, key,
                 (x - bounds.left) / Math.max(1f, bounds.width()),
                 (y - bounds.top) / Math.max(1f, bounds.height()));
         Prefs.saveTapPointPx(this, key, x, y, bounds.width(), bounds.height());
+
         calibrationStep++;
 
-        if (calibrationStep > 5) {
+        if (calibrationStep > 7) {
             Prefs.markCalibrationComplete(this);
             removeCalibration();
             showFloatingOverlay(true);
             status(Prefs.isCalibrated(this)
-                    ? "CAL كامل 2/2 ✓ — + و Confirm محفوظين بالبكسل الحقيقي"
+                    ? "CAL كامل 8/8 ✓ — كل مناطق القراءة والأزرار محفوظة"
                     : "المعايرة غير مكتملة — أعد CAL");
+            h.postDelayed(this::testOcr, 700);
         } else {
             showCalibrationStep();
         }
     }
+
 
     private void removeCalibration() {
         if (calibrationRoot != null && wm != null) {
@@ -2344,7 +2357,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         @Override protected void onDraw(Canvas c) {
             super.onDraw(c);
 
-            if (calibrationStep < 4) {
+            if (calibrationStep < 5) {
                 if (!sel.isEmpty()) {
                     c.drawRect(0, 0, getWidth(), sel.top, shade);
                     c.drawRect(0, sel.bottom, getWidth(), getHeight(), shade);
@@ -2358,8 +2371,10 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 }
             } else {
                 c.drawColor(Color.argb(15,0,0,0));
-                c.drawText(calibrationStep == 4 ? "TAP +" : "TAP CONFIRM",
-                        dp(18), dp(110), label);
+                String tapLabel = calibrationStep == 5 ? "TAP +"
+                        : calibrationStep == 6 ? "TAP CONFIRM"
+                        : "TAP SKIP";
+                c.drawText(tapLabel, dp(18), dp(110), label);
             }
         }
 
@@ -2367,7 +2382,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
             float x = Math.max(0, Math.min(getWidth(), e.getX()));
             float y = Math.max(dp(82), Math.min(getHeight()-dp(76), e.getY()));
 
-            if (calibrationStep >= 4) {
+            if (calibrationStep >= 5) {
                 if (e.getAction() == MotionEvent.ACTION_DOWN) {
                     final float rawX = e.getRawX();
                     final float rawY = e.getRawY();
