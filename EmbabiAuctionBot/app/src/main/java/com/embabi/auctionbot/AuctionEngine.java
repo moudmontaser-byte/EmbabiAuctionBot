@@ -104,6 +104,31 @@ public class AuctionEngine {
 
     public int getRound() { return round; }
 
+    // The game UI itself shows 1/5 ... 5/5. When that signal is visible it is
+    // more reliable than inferring the round from elapsed time or transitions.
+    public void syncRoundFromScreen(int guiRound) {
+        int target = Math.max(1, Math.min(5, guiRound));
+        if (target == round) return;
+
+        round = target;
+        complete = false;
+        lastPrice = -1;
+        lastRating = -1;
+        lastMyBudget = -1;
+        lastOppBudget = -1;
+        invalidFrames = 0;
+        weLead = false;
+        pendingOwnBid = false;
+        transitionCandidate = false;
+        pendingBasePrice = -1;
+        pendingVerifyFrames = 0;
+        ownConfirmAt = 0L;
+        pendingBidWasProbe = false;
+        lastOpponentReplyWasToProbe = false;
+        profiler.startRound(round);
+    }
+
+
     public void advanceRoundFromScreen() {
         if (complete) return;
         if (round < 5) round++;
