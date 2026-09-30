@@ -1286,7 +1286,12 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private void executeBid(AuctionEngine.Snapshot snap) {
         if (bidFlowInProgress || awaitingConfirm || mustSeeWaitingBeforeNextBid) return;
-        if (System.currentTimeMillis() < actionCooldownUntil) return;
+
+        long remaining = actionCooldownUntil - System.currentTimeMillis();
+        if (remaining > 0) {
+            h.postDelayed(() -> executeBid(snap), remaining + 80);
+            return;
+        }
 
         bidFlowInProgress = true;
         awaitingConfirm = false;
