@@ -1473,7 +1473,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                     actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
                     queueScan(ACTION_DEBOUNCE_MS + 120);
                 });
-            }, 1150L);
+            }, 1000L);
         });
     }
 
@@ -2406,46 +2406,10 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void clickConfirmSmart(Callback cb) {
-        // 1) Best case: Accessibility exposes the actual button.
-        AccessibilityNodeInfo root = getRootInActiveWindow();
-        AccessibilityNodeInfo node = findVisibleTextAny(root,
-                "تأكيد المزايدة", "تاكيد المزايده",
-                "تأكيد مزايدة", "تاكيد مزايدة",
-                "confirm bid", "confirm");
-        if (node != null && clickNode(node)) {
-            cb.onDone(true);
-            return;
-        }
-
-        // 2) If the WebView hides the node, locate the rendered button by OCR.
-        captureBitmap(bmp -> {
-            if (bmp == null) {
-                tapSavedPoint("confirm", cb);
-                return;
-            }
-
-            recognizer.process(InputImage.fromBitmap(bmp, 0))
-                    .addOnSuccessListener(tx -> {
-                        Rect r = findOcrTextRect(tx,
-                                "تأكيد المزايدة", "تاكيد المزايده",
-                                "تأكيد مزايدة", "تاكيد مزايدة",
-                                "confirm bid", "confirm");
-                        bmp.recycle();
-
-                        if (r != null) {
-                            dispatchTapPx(r.centerX(), r.centerY(),
-                                    () -> cb.onDone(true),
-                                    () -> tapSavedPoint("confirm", cb));
-                        } else {
-                            // 3) Last fallback: exact raw pixel from CAL.
-                            tapSavedPoint("confirm", cb);
-                        }
-                    })
-                    .addOnFailureListener(e -> {
-                        bmp.recycle();
-                        tapSavedPoint("confirm", cb);
-                    });
-        });
+        // User explicitly calibrates the real Confirm button.
+        // Keep this path intentionally simple and identical every time:
+        // one physical gesture at the exact calibrated pixel.
+        tapSavedPoint("confirm", cb);
     }
 
     private boolean tapNodePhysically(AccessibilityNodeInfo n, Callback cb) {
