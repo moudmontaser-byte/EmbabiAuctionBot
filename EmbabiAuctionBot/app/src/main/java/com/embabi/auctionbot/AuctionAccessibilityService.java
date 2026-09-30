@@ -1104,40 +1104,138 @@ public class AuctionAccessibilityService extends AccessibilityService {
         recognizePrepared(enlarged, ratingMode, cb, true);
     }
 
-    private void recognizePrepared(Bitmap image, boolean ratingMode, IntResult cb, boolean allowContrastFallback) {
+    private void recognizePrepared(Bitmap image, boolean ratingMode, IntResult cb,
+                                   boolean allowContrastFallback) {
         recognizer.process(InputImage.fromBitmap(image, 0))
                 .addOnSuccessListener(tx -> {
-                    Integer value = ratingMode ? extractRating(tx.getText()) : extractMoney(tx.getText());
+                    Integer first = ratingMode
+                            ? extractRating(tx.getText())
+                            : extractMoney(tx.getText());
 
-                    if (value != null || !allowContrastFallback) {
+                    boolean firstStrong = ratingMode
+                            ? first != null
+                            : first != null && first > 0;
+
+                    if (firstStrong || !allowContrastFallback) {
                         image.recycle();
-                        cb.accept(value);
+                        cb.accept(first);
                         return;
                     }
 
+                    // Money OCR in this game repeatedly confused 8 with O/0.
+                    // A returned zero is therefore treated as WEAK, not as a valid answer.
                     Bitmap high = makeHighContrast(image);
+                    Bitmap inverse = makeHighContrastInverse(image);
                     image.recycle();
 
+                    if (high == null && inverse == null) {
+                        cb.accept(first);
+                        return;
+                    }
+
                     if (high == null) {
-                        cb.accept(null);
+                        recognizePrepared(inverse, ratingMode, cb, false);
                         return;
                     }
 
                     recognizer.process(InputImage.fromBitmap(high, 0))
                             .addOnSuccessListener(tx2 -> {
-                                Integer v2 = ratingMode ? extractRating(tx2.getText()) : extractMoney(tx2.getText());
+                                Integer second = ratingMode
+                                        ? extractRating(tx2.getText())
+                                        : extractMoney(tx2.getText());
                                 high.recycle();
-                                cb.accept(v2);
+
+                                boolean secondStrong = ratingMode
+                                        ? second != null
+                                        : second != null && second > 0;
+
+                                if (secondStrong) {
+                                    if (inverse != null) inverse.recycle();
+                                    cb.accept(second);
+                                    return;
+                                }
+
+                                if (inverse == null) {
+                                    cb.accept(second != null ? second : first);
+                                    return;
+                                }
+
+                                recognizer.process(InputImage.fromBitmap(inverse, 0))
+                                        .addOnSuccessListener(tx3 -> {
+                                            Integer third = ratingMode
+                                                    ? extractRating(tx3.getText())
+                                                    : extractMoney(tx3.getText());
+                                            inverse.recycle();
+
+                                            boolean thirdStrong = ratingMode
+                                                    ? third != null
+                                                    : third != null && third > 0;
+
+                                            if (thirdStrong) cb.accept(third);
+                                            else if (second != null) cb.accept(second);
+                                            else cb.accept(first);
+                                        })
+                                        .addOnFailureListener(e3 -> {
+                                            inverse.recycle();
+                                            cb.accept(second != null ? second : first);
+                                        });
                             })
                             .addOnFailureListener(e2 -> {
                                 high.recycle();
-                                cb.accept(null);
+
+                                if (inverse == null) {
+                                    cb.accept(first);
+                                    return;
+                                }
+
+                                recognizer.process(InputImage.fromBitmap(inverse, 0))
+                                        .addOnSuccessListener(tx3 -> {
+                                            Integer third = ratingMode
+                                                    ? extractRating(tx3.getText())
+                                                    : extractMoney(tx3.getText());
+                                            inverse.recycle();
+                                            cb.accept(third != null ? third : first);
+                                        })
+                                        .addOnFailureListener(e3 -> {
+                                            inverse.recycle();
+                                            cb.accept(first);
+                                        });
                             });
                 })
                 .addOnFailureListener(e -> {
                     image.recycle();
                     cb.accept(null);
                 });
+    }
+
+    private Bitmap makeHighContrastInverse(Bitmap src) {
+        try {
+            int w = src.getWidth();
+            int hgt = src.getHeight();
+            int[] pixels = new int[w * hgt];
+            src.getPixels(pixels, 0, w, 0, 0, w, hgt);
+
+            long sum = 0;
+            for (int c : pixels) {
+                int y = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000;
+                sum += y;
+            }
+
+            int avg = pixels.length == 0 ? 140 : (int) (sum / pixels.length);
+            int threshold = Math.max(95, Math.min(185, avg + 8));
+
+            for (int i = 0; i < pixels.length; i++) {
+                int c = pixels[i];
+                int y = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000;
+                pixels[i] = y >= threshold ? Color.BLACK : Color.WHITE;
+            }
+
+            Bitmap out = Bitmap.createBitmap(w, hgt, Bitmap.Config.ARGB_8888);
+            out.setPixels(pixels, 0, w, 0, 0, w, hgt);
+            return out;
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private Bitmap makeHighContrast(Bitmap src) {
