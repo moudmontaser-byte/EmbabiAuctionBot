@@ -57,6 +57,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private boolean bidFlowInProgress = false;
     private boolean awaitingConfirm = false;
     private int confirmVerifyCount = 0;
+    private int confirmRetryCount = 0;
     private int[] confirmBaseline = null;
 
     private long actionCooldownUntil = 0L;
@@ -75,9 +76,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private Integer lastRating = null, lastPrice = null, lastMine = null, lastOpp = null;
     private String targetPackage = null;
 
-    // Post-game state machine. No 5–6 second assumption: every transition is screen-driven.
-    // 0 normal game, 1 find View lineups/results, 2 find Return/Main,
-    // 3 wait until Games hub is positively recognized, 4 wait for actual home.
+    // Post-game state machine. Every transition is screen-driven:
+    // 0 normal game, 1 find Start Simulation, 2 find View lineups/results,
+    // 3 find Return/Main, 4 wait for Games hub, 5 wait for actual home.
     private int postMatchStage = 0;
     private int postMatchSwipeAttempts = 0;
     private int grayArrowAttempts = 0;
@@ -192,8 +193,14 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
 
         AccessibilityServiceInfo info = getServiceInfo();
-        if (info == null || (info.getCapabilities() & AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) == 0) {
-            status("Gesture غير مفعّل — اقفل Accessibility للخدمة وافتحه تاني");
+        if (info == null ||
+                (info.getCapabilities() & AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) == 0) {
+            status("صلاحية الضغط غير مفعّلة — فعّل Accessibility للخدمة من جديد");
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 30 &&
+                (info.getCapabilities() & AccessibilityServiceInfo.CAPABILITY_CAN_TAKE_SCREENSHOT) == 0) {
+            status("صلاحية قراءة الشاشة غير مفعّلة — فعّل Accessibility للخدمة من جديد");
             return;
         }
 
@@ -2103,7 +2110,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 width, -2,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
-                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN |
+                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
                 PixelFormat.TRANSLUCENT);
 
         floatingLp.gravity = Gravity.TOP | Gravity.START;
