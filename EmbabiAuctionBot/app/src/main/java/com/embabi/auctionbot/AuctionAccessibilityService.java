@@ -104,7 +104,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private final Runnable monitor = new Runnable() {
         @Override public void run() {
             if (running && !paused) analyzeCurrentScreen();
-            if (running) h.postDelayed(this, 1000);
+            if (running) h.postDelayed(this, 450);
         }
     };
 
@@ -399,7 +399,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         // The recorded videos showed stale/misleading "انتظار المزايدة" text while
         // the real rendered button was "تأكيد المزايدة". Read the actual button.
         if (activeAuction) {
-            verifyTurnLabelByOcr();
+            detectAuctionTurnVisually();
             return;
         }
 
@@ -501,7 +501,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
-        verifyTurnLabelByOcr();
+        detectAuctionTurnVisually();
     }
 
     private Integer extractGuiRound(String all) {
@@ -1153,65 +1153,54 @@ public class AuctionAccessibilityService extends AccessibilityService {
         captureBitmap(bmp -> {
             if (bmp == null) {
                 screenReadBusy = false;
-
-                if (hints.rating != null && hints.price != null) {
-                    handleSnapshot(
-                            hints.rating,
-                            hints.price,
-                            hints.mine,
-                            hints.opp,
-                            allowAction
-                    );
-                } else {
-                    status("تعذر Screenshot ولم أجد Rating/Price موثوقين — بدون كليك");
-                }
+                Integer rating = hints.rating;
+                Integer price = hints.price;
+                handleSnapshot(rating, price, hints.mine, hints.opp, allowAction);
                 return;
             }
 
-            recognizer.process(InputImage.fromBitmap(bmp, 0))
-                    .addOnSuccessListener(fullTx -> {
-                        SpatialNumbers n =
-                                extractSpatialAuctionNumbers(fullTx, bmp.getWidth(), bmp.getHeight());
+            final Integer[] vals = new Integer[4];
+            final int[] done = {0};
+
+            IntResult[] sinks = new IntResult[4];
+            for (int i = 0; i < 4; i++) {
+                final int idx = i;
+                sinks[i] = value -> {
+                    vals[idx] = value;
+                    done[0]++;
+
+                    if (done[0] == 4) {
                         bmp.recycle();
                         screenReadBusy = false;
 
-                        Integer rating = n.rating != null ? n.rating : hints.rating;
+                        Integer rating = vals[0] != null ? vals[0] : hints.rating;
 
-                        Integer price = n.price != null && n.price > 0
-                                ? n.price
+                        Integer price = vals[1] != null && vals[1] > 0
+                                ? vals[1]
                                 : (hints.price != null && hints.price > 0 ? hints.price : null);
 
-                        Integer mine = n.mine != null && n.mine > 0
-                                ? n.mine
+                        Integer mine = vals[2] != null && vals[2] > 0
+                                ? vals[2]
                                 : (hints.mine != null && hints.mine > 0 ? hints.mine : null);
 
-                        Integer opp = n.opp != null && n.opp > 0
-                                ? n.opp
+                        Integer opp = vals[3] != null && vals[3] > 0
+                                ? vals[3]
                                 : (hints.opp != null && hints.opp > 0 ? hints.opp : null);
 
-                        status("AUTO OCR: OVR " + show(rating) +
+                        status("OCR: OVR " + show(rating) +
                                 " | Price " + show(price) +
                                 " | You " + show(mine) +
                                 " | Opp " + show(opp));
 
                         handleSnapshot(rating, price, mine, opp, allowAction);
-                    })
-                    .addOnFailureListener(e -> {
-                        bmp.recycle();
-                        screenReadBusy = false;
+                    }
+                };
+            }
 
-                        if (hints.rating != null && hints.price != null) {
-                            handleSnapshot(
-                                    hints.rating,
-                                    hints.price,
-                                    hints.mine,
-                                    hints.opp,
-                                    allowAction
-                            );
-                        } else {
-                            status("Full-screen OCR فشل — بدون كليك");
-                        }
-                    });
+            ocrRect(bmp, Prefs.getRegionOrDefault(this, "rating"), true, sinks[0]);
+            ocrRect(bmp, Prefs.getRegionOrDefault(this, "price"), false, sinks[1]);
+            ocrRect(bmp, Prefs.getRegionOrDefault(this, "mine"), false, sinks[2]);
+            ocrRect(bmp, Prefs.getRegionOrDefault(this, "opponent"), false, sinks[3]);
         });
     }
 
@@ -1735,6 +1724,88 @@ public class AuctionAccessibilityService extends AccessibilityService {
                         bmp.recycle();
                         status("OCR الشاشة فشل — بدون كليك");
                     });
+        });
+    }
+
+    private void detectAuctionTurnVisually() {
+        if (turnVisualBusy || screenshotBusy || screenReadBusy) return;
+
+        Rect bounds = Build.VERSION.SDK_INT >= 30
+                ? wm.getMaximumWindowMetrics().getBounds()
+                : new Rect(0, 0,
+                    getResources().getDisplayMetrics().widthPixels,
+                    getResources().getDisplayMetrics().heightPixels);
+
+        PointF p = Prefs.getTapPointPx(this, "confirm", bounds.width(), bounds.height());
+        if (p == null) {
+            status("مكان Confirm مش محفوظ — اعمل CAL");
+            return;
+        }
+
+        moveOverlayAwayFromPoint(p.x, p.y);
+        turnVisualBusy = true;
+
+        captureBitmap(bmp -> {
+            turnVisualBusy = false;
+
+            if (bmp == null) {
+                status("تعذر Screenshot — أستخدم النص كبديل");
+                verifyTurnLabelByOcr();
+                return;
+            }
+
+            int cx = Math.max(0, Math.min(bmp.getWidth() - 1, Math.round(p.x)));
+            int cy = Math.max(0, Math.min(bmp.getHeight() - 1, Math.round(p.y)));
+
+            int rx = Math.max(90, Math.round(bmp.getWidth() * .18f));
+            int ry = Math.max(28, Math.round(bmp.getHeight() * .028f));
+
+            int l = Math.max(0, cx - rx);
+            int r = Math.min(bmp.getWidth(), cx + rx);
+            int t = Math.max(0, cy - ry);
+            int b = Math.min(bmp.getHeight(), cy + ry);
+
+            int green = 0, amber = 0, neutral = 0, total = 0;
+            int sx = Math.max(2, (r-l)/90);
+            int sy = Math.max(2, (b-t)/26);
+
+            for (int y=t; y<b; y+=sy) {
+                for (int x=l; x<r; x+=sx) {
+                    int c = bmp.getPixel(x,y);
+                    int rr = Color.red(c), gg = Color.green(c), bb = Color.blue(c);
+                    total++;
+
+                    if (gg > 90 && gg > rr * 1.12f && gg > bb * 1.10f) {
+                        green++;
+                    } else if (rr > 145 && gg > 95 && bb < 115) {
+                        amber++;
+                    } else if (Math.max(rr, Math.max(gg,bb)) - Math.min(rr, Math.min(gg,bb)) < 35) {
+                        neutral++;
+                    }
+                }
+            }
+
+            bmp.recycle();
+
+            float activeRatio = total == 0 ? 0f : (green + amber) / (float) total;
+            float neutralRatio = total == 0 ? 0f : neutral / (float) total;
+
+            if (activeRatio >= .035f) {
+                mustSeeWaitingBeforeNextBid = false;
+                status("زر Confirm ملوّن ✓ — دورنا");
+                readAuctionSnapshot(true);
+                return;
+            }
+
+            if (neutralRatio >= .18f) {
+                confirmRetryCount = 0;
+                status("زر المزايدة رمادي — دور الخصم");
+                readAuctionSnapshot(false);
+                return;
+            }
+
+            status("لون زر المزايدة غير حاسم — أفحص النص داخل نفس المنطقة");
+            verifyTurnLabelByOcr();
         });
     }
 
