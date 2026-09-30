@@ -1594,17 +1594,12 @@ public class AuctionAccessibilityService extends AccessibilityService {
                             return;
                         }
 
-                        boolean ocrConfirm = containsAny(all,
-                                "تأكيد المزايدة", "تاكيد المزايده",
-                                "تأكيد مزايدة", "تاكيد مزايدة",
-                                "confirm bid", "confirm");
+                        int bottomTurn = detectBottomAuctionTurn(
+                                tx, bmp.getWidth(), bmp.getHeight());
+                        boolean ocrConfirm = bottomTurn == 1;
+                        boolean ocrWaiting = bottomTurn == 2;
 
-                        boolean ocrWaiting = containsAny(all,
-                                "انتظار المزايدة", "انتظار المزايده",
-                                "waiting bid", "waiting for bid");
-
-                        // Explicit Confirm is authoritative. The WebView/OCR can keep
-                        // stale Waiting text around for a frame, so Waiting may never override Confirm.
+                        // Only the LIVE bottom auction button decides the turn.
                         if (ocrConfirm) {
                             bmp.recycle();
 
