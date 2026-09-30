@@ -325,6 +325,24 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
+        // Withdrawal / defeat result: if Return Home is visible, click it immediately.
+        if (containsAny(all,
+                "العودة للرئيسية", "العوده للرئيسيه",
+                "العودة للصفحة الرئيسية", "العوده للصفحه الرئيسيه",
+                "return home", "return to main")) {
+            status("لقيت «العودة للرئيسية» ✓ — أضغطها مباشرة");
+            if (clickTextAny(root,
+                    "العودة للرئيسية", "العوده للرئيسيه",
+                    "العودة للصفحة الرئيسية", "العوده للصفحه الرئيسيه",
+                    "return home", "return to main")) {
+                onMatchCompleted();
+                postMatchStage = 5;
+                returnToMainClickedAt = now;
+                actionCooldownUntil = now + ACTION_DEBOUNCE_MS;
+            }
+            return;
+        }
+
         // ---------- Strict post-match loop ----------
         if (postMatchStage == 0 && isPostMatchScreen(all)) {
             postMatchStage = 1;
@@ -1154,7 +1172,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                     : (currentRound() == 1 ? 100 : null);
         }
 
-        boolean valid = rating != null && rating >= 50 && rating <= 99 &&
+        boolean valid = rating != null && rating >= 80 && rating <= 99 &&
                 price != null && price >= 1 && price <= 100 &&
                 mine != null && mine >= 0 && mine <= 100 &&
                 opp != null && opp >= 0 && opp <= 100;
@@ -1162,7 +1180,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if (!valid) {
             stableCandidate = null;
             stableCandidateCount = 0;
-            status("OCR غير مؤكد: OVR " + show(rating) +
+            status("OCR غير مؤكد/مشكوك فيه: OVR " + show(rating) +
                     " | Price " + show(price) +
                     " | You " + show(mine) +
                     " | Opp " + show(opp) +
@@ -1528,6 +1546,26 @@ public class AuctionAccessibilityService extends AccessibilityService {
                     .addOnSuccessListener(tx -> {
                         turnVisualBusy = false;
                         String all = ocrTextWithoutOverlay(tx);
+
+                        Rect immediateHome = findOcrTextRect(tx,
+                                "العودة للرئيسية", "العوده للرئيسيه",
+                                "العودة للصفحة الرئيسية", "العوده للصفحه الرئيسيه",
+                                "return home", "return to main");
+                        if (immediateHome != null) {
+                            Rect target = immediateHome;
+                            bmp.recycle();
+                            onMatchCompleted();
+                            postMatchStage = 5;
+                            returnToMainClickedAt = System.currentTimeMillis();
+                            status("OCR: لقيت «العودة للرئيسية» ✓ — أضغطها مباشرة");
+                            dispatchTapPx(target.centerX(), target.centerY(),
+                                    () -> queueScan(ACTION_DEBOUNCE_MS + 120),
+                                    () -> {
+                                        postMatchStage = 0;
+                                        status("فشل ضغط العودة للرئيسية — سأعيد البحث");
+                                    });
+                            return;
+                        }
 
                         if (isPostMatchScreen(all)) {
                             bmp.recycle();
