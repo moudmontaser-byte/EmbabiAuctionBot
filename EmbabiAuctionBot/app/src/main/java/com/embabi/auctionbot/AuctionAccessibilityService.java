@@ -939,9 +939,15 @@ public class AuctionAccessibilityService extends AccessibilityService {
         lastOpp = opp;
         refreshOverlay();
 
-        if (stableCandidateCount < 2) {
+        // On OUR turn, the explicit "تأكيد المزايدة" label already confirms the state,
+        // so one valid numeric read is enough. Requiring two identical OCR frames was
+        // causing the bot to sit still while the live timer kept moving.
+        int requiredReads = allowAction ? 1 : 2;
+
+        if (stableCandidateCount < requiredReads) {
             status((allowAction ? "دوري" : "مراقبة") +
-                    " • قراءة 1/2: OVR " + rating +
+                    " • قراءة " + stableCandidateCount + "/" + requiredReads +
+                    ": OVR " + rating +
                     " | " + price + "M | Y" + mine + " | O" + opp);
             return;
         }
