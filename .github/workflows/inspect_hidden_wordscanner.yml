@@ -1,6 +1,10 @@
 name: Inspect HiddenPlayer word-scanner
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/inspect_hidden_wordscanner.yml'
 jobs:
   inspect:
     runs-on: ubuntu-latest
