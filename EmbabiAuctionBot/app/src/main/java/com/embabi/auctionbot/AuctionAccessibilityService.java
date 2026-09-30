@@ -1384,6 +1384,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                             return;
                         }
 
+                        bmp.recycle();
                         lastDecision = "SKIP→";
                         refreshOverlay();
                         status("PASS ✓ — لقيت «تخطي اللاعب» وأضغطه الآن");
