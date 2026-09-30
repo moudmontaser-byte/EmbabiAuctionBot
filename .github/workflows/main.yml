@@ -45,7 +45,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: EmbabiAuctionGenius-v14-DIAGNOSTIC-APK
+          name: EmbabiAuctionGenius-v15-VIDEO-STUDY-FIX-APK
           path: EmbabiAuctionBot/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
@@ -58,6 +58,6 @@ jobs:
       - name: Upload reusable source ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: EmbabiAuctionGenius-v14-DIAGNOSTIC-SOURCE
+          name: EmbabiAuctionGenius-v15-VIDEO-STUDY-FIX-SOURCE
           path: EmbabiAuctionGenius_UPLOAD_TO_BUILD.zip
           if-no-files-found: error
