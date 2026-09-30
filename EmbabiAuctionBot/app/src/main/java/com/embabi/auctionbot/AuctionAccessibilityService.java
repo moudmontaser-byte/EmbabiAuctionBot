@@ -724,24 +724,88 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
                         if (postMatchStage == 1) {
                             hit = findOcrTextRect(tx,
-                                    "عرض التشكيلات", "عرض النتائج",
-                                    "عرض النتيجة", "عرض النتيجه",
-                                    "التشكيلات", "view lineups", "view results");
+                                    "بدء المحاكاه", "بدء المحاكاة",
+                                    "ابدأ المحاكاه", "ابدأ المحاكاة",
+                                    "محاكاه المباراه", "محاكاة المباراة",
+                                    "simulate match", "start simulation");
 
                             if (hit != null) {
                                 postMatchStage = 2;
                                 postMatchSwipeAttempts = 0;
                                 Rect target = hit;
                                 bmp.recycle();
-                                status("OCR لقى «عرض التشكيلات/النتائج» ✓");
+                                status("OCR لقى «بدء المحاكاة» ✓ — أضغطه");
                                 dispatchTapPx(target.centerX(), target.centerY(),
                                         () -> queueScan(ACTION_DEBOUNCE_MS + 120),
-                                        () -> status("فشل الضغط على عرض التشكيلات"));
+                                        () -> {
+                                            postMatchStage = 1;
+                                            status("فشل ضغط بدء المحاكاة — سأعيد البحث");
+                                        });
+                                return;
+                            }
+
+                            // Some versions may already show results without a simulation button.
+                            hit = findOcrTextRect(tx,
+                                    "عرض التشكيلات", "عرض النتائج",
+                                    "عرض النتيجة", "عرض النتيجه",
+                                    "التشكيلات", "view lineups", "view results");
+
+                            if (hit != null) {
+                                postMatchStage = 3;
+                                postMatchSwipeAttempts = 0;
+                                Rect target = hit;
+                                bmp.recycle();
+                                status("OCR: النتيجة جاهزة ✓ — أضغط عرض التشكيلات");
+                                dispatchTapPx(target.centerX(), target.centerY(),
+                                        () -> queueScan(ACTION_DEBOUNCE_MS + 120),
+                                        () -> {
+                                            postMatchStage = 1;
+                                            status("فشل ضغط عرض التشكيلات — سأعيد البحث");
+                                        });
                                 return;
                             }
                         }
 
                         if (postMatchStage == 2) {
+                            hit = findOcrTextRect(tx,
+                                    "عرض التشكيلات", "عرض النتائج",
+                                    "عرض النتيجة", "عرض النتيجه",
+                                    "التشكيلات", "view lineups", "view results");
+
+                            if (hit != null) {
+                                postMatchStage = 3;
+                                postMatchSwipeAttempts = 0;
+                                Rect target = hit;
+                                bmp.recycle();
+                                status("OCR: المحاكاة خلصت ✓ — أضغط عرض التشكيلات/النتائج");
+                                dispatchTapPx(target.centerX(), target.centerY(),
+                                        () -> queueScan(ACTION_DEBOUNCE_MS + 120),
+                                        () -> {
+                                            postMatchStage = 2;
+                                            status("فشل ضغط عرض التشكيلات — سأعيد البحث");
+                                        });
+                                return;
+                            }
+
+                            // If Start Simulation is still visible, the previous tap did not register.
+                            hit = findOcrTextRect(tx,
+                                    "بدء المحاكاه", "بدء المحاكاة",
+                                    "ابدأ المحاكاه", "ابدأ المحاكاة",
+                                    "محاكاه المباراه", "محاكاة المباراة",
+                                    "simulate match", "start simulation");
+
+                            if (hit != null) {
+                                Rect target = hit;
+                                bmp.recycle();
+                                status("زر بدء المحاكاة ما زال ظاهر — أعيد الضغط");
+                                dispatchTapPx(target.centerX(), target.centerY(),
+                                        () -> queueScan(ACTION_DEBOUNCE_MS + 120),
+                                        () -> status("فشل إعادة ضغط بدء المحاكاة"));
+                                return;
+                            }
+                        }
+
+                        if (postMatchStage == 3) {
                             hit = findOcrTextRect(tx,
                                     "العودة للرئيسية", "العوده للرئيسيه",
                                     "العودة للصفحة الرئيسية", "العوده للصفحه الرئيسيه",
@@ -749,21 +813,24 @@ public class AuctionAccessibilityService extends AccessibilityService {
                                     "return to main", "return home", "main menu");
 
                             if (hit != null) {
-                                postMatchStage = 3;
+                                postMatchStage = 4;
                                 postMatchSwipeAttempts = 0;
                                 returnToMainClickedAt = System.currentTimeMillis();
                                 onMatchCompleted();
                                 Rect target = hit;
                                 bmp.recycle();
-                                status("OCR لقى «العودة للرئيسية» ✓");
+                                status("OCR لقى «العودة للرئيسية» ✓ — أضغطها");
                                 dispatchTapPx(target.centerX(), target.centerY(),
                                         () -> queueScan(ACTION_DEBOUNCE_MS + 120),
-                                        () -> status("فشل الضغط على العودة للرئيسية"));
+                                        () -> {
+                                            postMatchStage = 3;
+                                            status("فشل ضغط العودة للرئيسية — سأعيد البحث");
+                                        });
                                 return;
                             }
                         }
 
-                        if (postMatchStage == 3 || postMatchStage == 4) {
+                        if (postMatchStage == 4 || postMatchStage == 5) {
                             hit = findOcrTextRect(tx,
                                     "العب الآن", "العب الان", "play now");
 
@@ -790,7 +857,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                             Rect games = findOcrTextRect(tx,
                                     "المزاد", "auction", "الألعاب", "الالعاب", "games");
 
-                            if (games != null) {
+                            if (games != null && postMatchStage == 4) {
                                 bmp.recycle();
                                 status("OCR أكد صفحة الألعاب ✓ — أضغط السهم الرمادي");
                                 tapGrayGamesArrow();
@@ -800,7 +867,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
                         bmp.recycle();
 
-                        if (postMatchStage == 1 || postMatchStage == 2) {
+                        if (postMatchStage >= 1 && postMatchStage <= 3) {
                             postMatchSwipeAttempts++;
 
                             if (postMatchSwipeAttempts > 45) {
@@ -808,7 +875,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                                 Prefs.setBotPaused(AuctionAccessibilityService.this, true);
                                 status("بحثت 45 مرة ومش لاقي الكلمة المطلوبة — PAUSE");
                             } else {
-                                status("الكلمة مش ظاهرة — Scroll لتحت #" + postMatchSwipeAttempts);
+                                status("الكلمة المطلوبة مش ظاهرة — Scroll لتحت #" + postMatchSwipeAttempts);
                                 swipePageDown();
                             }
                         } else {
@@ -2582,12 +2649,12 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private void tapGrayGamesArrow() {
         dispatchTapNormalized(.890f, .078f,
                 () -> {
-                    postMatchStage = 4;
-                    status("السهم الرمادي اتضغط ✓ — أتحقق من الصفحة التالية");
+                    postMatchStage = 5;
+                    status("السهم الرمادي اتضغط ✓ — أتحقق من الصفحة الرئيسية");
                 },
                 () -> {
-                    postMatchStage = 3;
-                    status("Gesture السهم اتلغى — لن أكمل إلا بعد إعادة التحقق");
+                    postMatchStage = 4;
+                    status("Gesture السهم اتلغى — سأعيد التحقق من صفحة الألعاب");
                 });
     }
 
