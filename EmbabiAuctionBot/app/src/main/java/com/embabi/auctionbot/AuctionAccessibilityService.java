@@ -657,6 +657,147 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
     }
 
+    private void scanPostMatchByOcr() {
+        if (screenshotBusy || screenReadBusy) return;
+
+        captureBitmap(bmp -> {
+            if (bmp == null) {
+                status("تعذر Screenshot بعد الجيم — بدون كليك");
+                return;
+            }
+
+            recognizer.process(InputImage.fromBitmap(bmp, 0))
+                    .addOnSuccessListener(tx -> {
+                        Rect hit = null;
+
+                        if (postMatchStage == 1) {
+                            hit = findOcrTextRect(tx,
+                                    "عرض التشكيلات", "عرض النتائج",
+                                    "عرض النتيجة", "عرض النتيجه",
+                                    "التشكيلات", "view lineups", "view results");
+
+                            if (hit != null) {
+                                postMatchStage = 2;
+                                postMatchSwipeAttempts = 0;
+                                Rect target = hit;
+                                bmp.recycle();
+                                status("OCR لقى «عرض التشكيلات/النتائج» ✓");
+                                dispatchTapPx(target.centerX(), target.centerY(),
+                                        () -> queueScan(ACTION_DEBOUNCE_MS + 120),
+                                        () -> status("فشل الضغط على عرض التشكيلات"));
+                                return;
+                            }
+                        }
+
+                        if (postMatchStage == 2) {
+                            hit = findOcrTextRect(tx,
+                                    "العودة للرئيسية", "العوده للرئيسيه",
+                                    "العودة للصفحة الرئيسية", "العوده للصفحه الرئيسيه",
+                                    "القائمة الرئيسية", "القائمه الرئيسيه",
+                                    "return to main", "return home", "main menu");
+
+                            if (hit != null) {
+                                postMatchStage = 3;
+                                postMatchSwipeAttempts = 0;
+                                returnToMainClickedAt = System.currentTimeMillis();
+                                onMatchCompleted();
+                                Rect target = hit;
+                                bmp.recycle();
+                                status("OCR لقى «العودة للرئيسية» ✓");
+                                dispatchTapPx(target.centerX(), target.centerY(),
+                                        () -> queueScan(ACTION_DEBOUNCE_MS + 120),
+                                        () -> status("فشل الضغط على العودة للرئيسية"));
+                                return;
+                            }
+                        }
+
+                        if (postMatchStage == 3 || postMatchStage == 4) {
+                            hit = findOcrTextRect(tx,
+                                    "العب الآن", "العب الان", "play now");
+
+                            if (hit != null) {
+                                Rect target = hit;
+                                bmp.recycle();
+
+                                if (stopAfterReturn) {
+                                    postMatchStage = 0;
+                                    stopBot("اكتملت دورة التكرار ✓ — رجعنا للرئيسية");
+                                } else {
+                                    engine.resetSession();
+                                    clearSessionScreenState();
+                                    Prefs.setCurrentRound(AuctionAccessibilityService.this, 1);
+                                    postMatchStage = 0;
+                                    status("الرئيسية جاهزة ✓ — أبدأ لوب مزاد جديدة");
+                                    dispatchTapPx(target.centerX(), target.centerY(),
+                                            () -> queueScan(ACTION_DEBOUNCE_MS + 120),
+                                            () -> status("فشل الضغط على العب الآن"));
+                                }
+                                return;
+                            }
+
+                            Rect games = findOcrTextRect(tx,
+                                    "المزاد", "auction", "الألعاب", "الالعاب", "games");
+
+                            if (games != null) {
+                                bmp.recycle();
+                                status("OCR أكد صفحة الألعاب ✓ — أضغط السهم الرمادي");
+                                tapGrayGamesArrow();
+                                return;
+                            }
+                        }
+
+                        bmp.recycle();
+
+                        if (postMatchStage == 1 || postMatchStage == 2) {
+                            postMatchSwipeAttempts++;
+
+                            if (postMatchSwipeAttempts > 45) {
+                                paused = true;
+                                Prefs.setBotPaused(AuctionAccessibilityService.this, true);
+                                status("بحثت 45 مرة ومش لاقي الكلمة المطلوبة — PAUSE");
+                            } else {
+                                status("الكلمة مش ظاهرة — Scroll لتحت #" + postMatchSwipeAttempts);
+                                swipePageDown();
+                            }
+                        } else {
+                            status("أنتظر الصفحة التالية…");
+                        }
+                    })
+                    .addOnFailureListener(e -> {
+                        bmp.recycle();
+                        status("OCR شاشة نهاية الجيم فشل — بدون كليك");
+                    });
+        });
+    }
+
+    private Rect findOcrTextRect(Text tx, String... targets) {
+        if (tx == null) return null;
+
+        for (Text.TextBlock block : tx.getTextBlocks()) {
+            for (Text.Line line : block.getLines()) {
+                String lineText = normalize(line.getText());
+
+                for (String target : targets) {
+                    if (lineText.contains(normalize(target))) {
+                        Rect r = line.getBoundingBox();
+                        if (r != null && !r.isEmpty()) return new Rect(r);
+                    }
+                }
+
+                for (Text.Element el : line.getElements()) {
+                    String elementText = normalize(el.getText());
+                    for (String target : targets) {
+                        if (elementText.contains(normalize(target))) {
+                            Rect r = el.getBoundingBox();
+                            if (r != null && !r.isEmpty()) return new Rect(r);
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     private void scrollPostMatchFor(String target, int maxAttempts) {
         postMatchSwipeAttempts++;
 
