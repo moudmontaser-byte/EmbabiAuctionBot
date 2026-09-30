@@ -283,6 +283,16 @@ public class AuctionAccessibilityService extends AccessibilityService {
         String all = normalize(raw);
         long now = System.currentTimeMillis();
 
+        Integer guiRound = extractGuiRound(all);
+        if (guiRound != null && postMatchStage == 0 && engine != null &&
+                guiRound != engine.getRound()) {
+            engine.syncRoundFromScreen(guiRound);
+            Prefs.setCurrentRound(this, guiRound);
+            stableCandidate = null;
+            stableCandidateCount = 0;
+            status("قرأت الجولة من الشاشة مباشرة: " + guiRound + "/5 ✓");
+        }
+
         // ---------- End-of-game navigation: identical safety philosophy to Hidden Player ----------
         if (postMatchStage == 0 && isPostMatchScreen(all)) {
             postMatchStage = 1;
@@ -322,7 +332,15 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         // We advance only when the result screen disappeared AND a new live auction screen is visible.
         if (resultWaiting && activeAuction) {
-            if (engine != null && engine.getRound() < 5) {
+            if (guiRound != null) {
+                engine.syncRoundFromScreen(guiRound);
+                Prefs.setCurrentRound(this, guiRound);
+                resultWaiting = false;
+                stableCandidate = null;
+                stableCandidateCount = 0;
+                lastDecision = "جولة جديدة";
+                status("ظهر مزاد اللاعب التالي ✓ — الجولة " + guiRound + "/5");
+            } else if (engine != null && engine.getRound() < 5) {
                 engine.advanceRoundFromScreen();
                 Prefs.setCurrentRound(this, engine.getRound());
                 resultWaiting = false;
@@ -529,6 +547,18 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 (avgG >= 95 && avgG > avgR + 24 && avgG > avgB + 12);
     }
 
+    private Integer extractGuiRound(String all) {
+        if (all == null || all.isEmpty()) return null;
+        String western = toWesternDigits(all);
+        Matcher m = Pattern.compile("(?<!\\d)([1-5])\\s*/\\s*5(?!\\d)").matcher(western);
+        if (!m.find()) return null;
+        try {
+            return Integer.parseInt(m.group(1));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     private boolean isTargetPackage(AccessibilityNodeInfo root) {
         CharSequence p = root.getPackageName();
         if (p == null) return false;
@@ -541,9 +571,13 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private boolean isAuctionActiveScreen(String all) {
         boolean turn = containsAny(all, "دورك", "دور الخصم", "خصمك", "your turn", "opponent turn");
-        boolean controls = containsAny(all, "confirm", "تأكيد", "تاكيد", "زايد", "مزايده", "مزايدة");
-        boolean price = containsAny(all, "السعر", "price", "bid");
-        return turn || (controls && price);
+        boolean controls = containsAny(all,
+                "confirm", "تأكيد", "تاكيد",
+                "زايد", "مزايده", "مزايدة",
+                "انتظار المزايدة", "انتظار المزايده",
+                "waiting bid", "waiting for bid");
+        boolean price = containsAny(all, "السعر", "price", "bid", "مزايدتك");
+        return turn || controls || price;
     }
 
     private boolean isAuctionResultScreen(String all) {
@@ -1893,8 +1927,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
         for (int i = 0; i < 7 && cur != null; i++, cur = cur.getParent()) {
             if (cur.isClickable() && cur.isEnabled()) {
                 try {
-                    actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
                     if (cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                        actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
                         return true;
                     }
                 } catch (Exception ignored) {}
