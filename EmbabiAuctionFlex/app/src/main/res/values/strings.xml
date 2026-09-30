@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Embabi Auction Flex</string>
+    <string name="accessibility_service_description">Automates Embabi auction navigation and bidding using user-defined rules and calibrated screen areas.</string>
+</resources>
