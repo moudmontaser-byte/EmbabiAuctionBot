@@ -1076,7 +1076,13 @@ public class AuctionAccessibilityService extends AccessibilityService {
         stableCandidateCount = 0;
 
         AuctionEngine.Decision d = engine.onStableSnapshot(snap);
-        lastDecision = d.action.name();
+        if (d.action == AuctionEngine.Action.PASS && rating < d.minRating) {
+            lastDecision = "PASS " + rating + "<" + d.minRating;
+        } else if (d.action == AuctionEngine.Action.BID) {
+            lastDecision = "BID +1";
+        } else {
+            lastDecision = d.action.name();
+        }
         Prefs.setCurrentRound(this, engine.getRound());
         Prefs.saveLastSnapshot(this, rating, price, mine, opp, lastDecision);
 
@@ -2312,32 +2318,59 @@ public class AuctionAccessibilityService extends AccessibilityService {
             if (cancelled != null) h.post(cancelled);
             return;
         }
-        actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
-        Path p = new Path();
-        p.moveTo(x, y);
-        p.lineTo(x + .5f, y + .5f);
-        GestureDescription.StrokeDescription stroke = new GestureDescription.StrokeDescription(p, 0, 90);
-        GestureDescription g = new GestureDescription.Builder().addStroke(stroke).build();
 
-        boolean accepted;
-        try {
-            accepted = dispatchGesture(g, new GestureResultCallback() {
-                @Override public void onCompleted(GestureDescription gestureDescription) {
-                    super.onCompleted(gestureDescription);
-                    actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
-                    if (completed != null) h.post(completed);
-                }
+        final boolean restoreOverlay =
+                floatingView != null && floatingView.getVisibility() == View.VISIBLE;
 
-                @Override public void onCancelled(GestureDescription gestureDescription) {
-                    super.onCancelled(gestureDescription);
-                    if (cancelled != null) h.post(cancelled);
-                }
-            }, null);
-        } catch (Exception e) {
-            accepted = false;
+        if (restoreOverlay) {
+            floatingView.setVisibility(View.INVISIBLE);
         }
 
-        if (!accepted && cancelled != null) h.post(cancelled);
+        actionCooldownUntil = System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
+
+        h.postDelayed(() -> {
+            Path p = new Path();
+            p.moveTo(x, y);
+            p.lineTo(x + .5f, y + .5f);
+
+            GestureDescription.StrokeDescription stroke =
+                    new GestureDescription.StrokeDescription(p, 0, 110);
+
+            GestureDescription g =
+                    new GestureDescription.Builder().addStroke(stroke).build();
+
+            boolean accepted;
+            try {
+                accepted = dispatchGesture(g, new GestureResultCallback() {
+                    @Override public void onCompleted(GestureDescription gestureDescription) {
+                        super.onCompleted(gestureDescription);
+                        h.postDelayed(() -> {
+                            if (restoreOverlay && floatingView != null) {
+                                floatingView.setVisibility(View.VISIBLE);
+                            }
+                            if (completed != null) completed.run();
+                        }, 120);
+                    }
+
+                    @Override public void onCancelled(GestureDescription gestureDescription) {
+                        super.onCancelled(gestureDescription);
+                        if (restoreOverlay && floatingView != null) {
+                            floatingView.setVisibility(View.VISIBLE);
+                        }
+                        if (cancelled != null) h.post(cancelled);
+                    }
+                }, null);
+            } catch (Exception e) {
+                accepted = false;
+            }
+
+            if (!accepted) {
+                if (restoreOverlay && floatingView != null) {
+                    floatingView.setVisibility(View.VISIBLE);
+                }
+                if (cancelled != null) h.post(cancelled);
+            }
+        }, 90);
     }
 
     // ---------- UI helpers / status ----------
