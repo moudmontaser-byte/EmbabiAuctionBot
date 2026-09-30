@@ -149,7 +149,7 @@ public class MainActivity extends Activity {
         calibrationState.setPadding(0, dp(4), 0, dp(10));
         calibration.addView(calibrationState);
 
-        Button cal = button("▣ ابدأ المعايرة: 4 مربعات + زر + + Confirm", blue, Color.WHITE);
+        Button cal = button("▣ ابدأ المعايرة: 5 مناطق + أزرار + / Confirm / Skip", blue, Color.WHITE);
         cal.setOnClickListener(v -> send(BotActions.CALIBRATE));
         calibration.addView(cal);
 
@@ -266,7 +266,7 @@ public class MainActivity extends Activity {
         }
         if (calibrationState != null) {
             calibrationState.setText(Prefs.isCalibrated(this)
-                    ? "المعايرة READY ✓ — 4 مناطق OCR + زر + + Confirm محفوظين."
+                    ? "المعايرة READY ✓ — 5 مناطق ثابتة + + / Confirm / Skip محفوظين."
                     : "المعايرة غير مكتملة — اعملها مرة واحدة على شاشة مزاد حقيقية.");
         }
     }
