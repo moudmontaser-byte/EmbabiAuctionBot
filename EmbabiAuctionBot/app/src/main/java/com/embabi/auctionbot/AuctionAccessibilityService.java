@@ -1336,7 +1336,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
-        int scale = ratingMode ? 4 : 3;
+        int scale = ratingMode ? 5 : 4;
         Bitmap enlarged;
         try {
             enlarged = Bitmap.createScaledBitmap(
@@ -1354,15 +1354,107 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         recognizer.process(InputImage.fromBitmap(enlarged, 0))
                 .addOnSuccessListener(tx -> {
-                    Integer v = ratingMode ? extractRating(tx.getText()) : extractMoney(tx.getText());
+                    Integer first = ratingMode ? extractRating(tx.getText()) : extractMoney(tx.getText());
+
+                    if (first != null && (ratingMode || first > 0)) {
+                        enlarged.recycle();
+                        cb.accept(first);
+                        return;
+                    }
+
+                    Bitmap hi = thresholdForOcr(enlarged, false);
+                    Bitmap inv = thresholdForOcr(enlarged, true);
                     enlarged.recycle();
+
+                    if (hi == null) {
+                        if (inv != null) {
+                            recognizeOne(inv, ratingMode, cb);
+                        } else {
+                            cb.accept(first);
+                        }
+                        return;
+                    }
+
+                    recognizer.process(InputImage.fromBitmap(hi, 0))
+                            .addOnSuccessListener(tx2 -> {
+                                Integer second = ratingMode ? extractRating(tx2.getText()) : extractMoney(tx2.getText());
+                                hi.recycle();
+
+                                if (second != null && (ratingMode || second > 0)) {
+                                    if (inv != null) inv.recycle();
+                                    cb.accept(second);
+                                    return;
+                                }
+
+                                if (inv == null) {
+                                    cb.accept(second != null ? second : first);
+                                    return;
+                                }
+
+                                recognizeOne(inv, ratingMode, value -> {
+                                    if (value != null && (ratingMode || value > 0)) cb.accept(value);
+                                    else if (second != null) cb.accept(second);
+                                    else cb.accept(first);
+                                });
+                            })
+                            .addOnFailureListener(e2 -> {
+                                hi.recycle();
+                                if (inv != null) recognizeOne(inv, ratingMode, cb);
+                                else cb.accept(first);
+                            });
+                })
+                .addOnFailureListener(e -> {
+                    Bitmap hi = thresholdForOcr(enlarged, false);
+                    enlarged.recycle();
+                    if (hi != null) recognizeOne(hi, ratingMode, cb);
+                    else cb.accept(null);
+                });
+    }
+
+    private void recognizeOne(Bitmap img, boolean ratingMode, IntResult cb) {
+        recognizer.process(InputImage.fromBitmap(img, 0))
+                .addOnSuccessListener(tx -> {
+                    Integer v = ratingMode ? extractRating(tx.getText()) : extractMoney(tx.getText());
+                    img.recycle();
                     cb.accept(v);
                 })
                 .addOnFailureListener(e -> {
-                    enlarged.recycle();
+                    img.recycle();
                     cb.accept(null);
                 });
     }
+
+    private Bitmap thresholdForOcr(Bitmap src, boolean inverse) {
+        try {
+            int w = src.getWidth(), h = src.getHeight();
+            int[] px = new int[w * h];
+            src.getPixels(px, 0, w, 0, 0, w, h);
+
+            long sum = 0;
+            for (int c : px) {
+                int y = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000;
+                sum += y;
+            }
+
+            int avg = px.length == 0 ? 140 : (int)(sum / px.length);
+            int threshold = Math.max(90, Math.min(190, avg + 8));
+
+            for (int i = 0; i < px.length; i++) {
+                int c = px[i];
+                int y = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000;
+                boolean bright = y >= threshold;
+                if (inverse) bright = !bright;
+                px[i] = bright ? Color.WHITE : Color.BLACK;
+            }
+
+            Bitmap out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            out.setPixels(px, 0, w, 0, 0, w, h);
+            return out;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
 
     private String show(Integer v) { return v == null ? "—" : String.valueOf(v); }
 
