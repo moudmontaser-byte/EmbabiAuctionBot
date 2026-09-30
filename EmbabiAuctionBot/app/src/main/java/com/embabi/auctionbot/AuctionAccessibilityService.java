@@ -574,6 +574,10 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private boolean isPostMatchScreen(String all) {
         return containsAny(all,
+                "بدء المحاكاه", "بدء المحاكاة",
+                "ابدأ المحاكاه", "ابدأ المحاكاة",
+                "محاكاه المباراه", "محاكاة المباراة",
+                "simulate match", "start simulation",
                 "نهاية المباراه", "نهاية المباراة",
                 "انتهت المباراه", "انتهت المباراة",
                 "النتيجه النهائيه", "النتيجة النهائية",
@@ -598,15 +602,32 @@ public class AuctionAccessibilityService extends AccessibilityService {
         long now = System.currentTimeMillis();
 
         if (postMatchStage == 1) {
-            AccessibilityNodeInfo n = findVisibleTextAny(root,
+            AccessibilityNodeInfo sim = findVisibleTextAny(root,
+                    "بدء المحاكاه", "بدء المحاكاة",
+                    "ابدأ المحاكاه", "ابدأ المحاكاة",
+                    "محاكاه المباراه", "محاكاة المباراة",
+                    "simulate match", "start simulation");
+
+            if (sim != null) {
+                status("لقيت «بدء المحاكاة» ✓ — أضغطه");
+                if (clickNode(sim)) {
+                    postMatchStage = 2;
+                    postMatchSwipeAttempts = 0;
+                    postActionNotBefore = now + ACTION_DEBOUNCE_MS;
+                    queueScan(ACTION_DEBOUNCE_MS + 120);
+                }
+                return;
+            }
+
+            AccessibilityNodeInfo lineups = findVisibleTextAny(root,
                     "عرض التشكيلات", "عرض النتائج",
                     "عرض النتيجه", "عرض النتيجة", "التشكيلات",
                     "view lineups", "view results");
 
-            if (n != null) {
-                status("لقيت «عرض التشكيلات/النتائج» ✓ — أضغطه");
-                if (clickNode(n)) {
-                    postMatchStage = 2;
+            if (lineups != null) {
+                status("النتيجة جاهزة ✓ — أضغط عرض التشكيلات/النتائج");
+                if (clickNode(lineups)) {
+                    postMatchStage = 3;
                     postMatchSwipeAttempts = 0;
                     postActionNotBefore = now + ACTION_DEBOUNCE_MS;
                     queueScan(ACTION_DEBOUNCE_MS + 120);
@@ -619,19 +640,15 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
 
         if (postMatchStage == 2) {
-            AccessibilityNodeInfo n = findVisibleTextAny(root,
-                    "العوده للرئيسيه", "العودة للرئيسية",
-                    "العوده للصفحه الرئيسيه", "العودة للصفحة الرئيسية",
-                    "العوده للقائمه الرئيسيه", "العودة للقائمة الرئيسية",
-                    "القائمه الرئيسيه", "القائمة الرئيسية",
-                    "return to main", "return home", "main menu");
+            AccessibilityNodeInfo lineups = findVisibleTextAny(root,
+                    "عرض التشكيلات", "عرض النتائج",
+                    "عرض النتيجه", "عرض النتيجة", "التشكيلات",
+                    "view lineups", "view results");
 
-            if (n != null) {
-                status("لقيت «العودة للرئيسية» ✓ — أضغطها");
-                if (clickNode(n)) {
-                    onMatchCompleted();
+            if (lineups != null) {
+                status("المحاكاة خلصت ✓ — أضغط عرض التشكيلات/النتائج");
+                if (clickNode(lineups)) {
                     postMatchStage = 3;
-                    returnToMainClickedAt = now;
                     postMatchSwipeAttempts = 0;
                     postActionNotBefore = now + ACTION_DEBOUNCE_MS;
                     queueScan(ACTION_DEBOUNCE_MS + 120);
@@ -644,13 +661,37 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
 
         if (postMatchStage == 3) {
+            AccessibilityNodeInfo home = findVisibleTextAny(root,
+                    "العوده للرئيسيه", "العودة للرئيسية",
+                    "العوده للصفحه الرئيسيه", "العودة للصفحة الرئيسية",
+                    "العوده للقائمه الرئيسيه", "العودة للقائمة الرئيسية",
+                    "القائمه الرئيسيه", "القائمة الرئيسية",
+                    "return to main", "return home", "main menu");
+
+            if (home != null) {
+                status("لقيت «العودة للرئيسية» ✓ — أضغطها");
+                if (clickNode(home)) {
+                    onMatchCompleted();
+                    postMatchStage = 4;
+                    returnToMainClickedAt = now;
+                    postMatchSwipeAttempts = 0;
+                    postActionNotBefore = now + ACTION_DEBOUNCE_MS;
+                    queueScan(ACTION_DEBOUNCE_MS + 120);
+                }
+                return;
+            }
+
+            scanPostMatchByOcr();
+            return;
+        }
+
+        if (postMatchStage == 4) {
             if (containsAny(all, "العب الان", "العب الآن", "play now")) {
                 finishReturnCycle(root);
                 return;
             }
 
-            boolean gamesHub = isGamesHub(all);
-            if (gamesHub) {
+            if (isGamesHub(all)) {
                 status("وصلت صفحة الألعاب ✓ — أضغط السهم الرمادي");
                 tapGrayGamesArrow();
             } else {
@@ -659,7 +700,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
-        if (postMatchStage == 4) {
+        if (postMatchStage == 5) {
             if (containsAny(all, "العب الان", "العب الآن", "play now")) {
                 finishReturnCycle(root);
             } else {
