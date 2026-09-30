@@ -267,6 +267,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         postActionNotBefore = 0L;
         returnToMainClickedAt = 0L;
         mustSeeWaitingBeforeNextBid = false;
+        confirmRetryCount = 0;
         stableCandidate = null;
         stableCandidateCount = 0;
         cancelBidFlow();
@@ -1302,6 +1303,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
+        confirmRetryCount = 0;
         bidFlowInProgress = true;
         awaitingConfirm = false;
         engine.markOwnBidStarted(snap.price);
@@ -1468,6 +1470,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                                 "waiting bid", "waiting for bid")) {
                             bmp.recycle();
                             mustSeeWaitingBeforeNextBid = false;
+                            confirmRetryCount = 0;
                             status("OCR: «انتظار المزايدة» = دور الخصم");
                             readAuctionSnapshot(false);
                             return;
@@ -1481,7 +1484,29 @@ public class AuctionAccessibilityService extends AccessibilityService {
                             if (awaitingConfirm) {
                                 status("OCR: «تأكيد المزايدة» ✓ — أضغط Confirm");
                                 clickConfirmAndFinalize();
-                            } else if (!mustSeeWaitingBeforeNextBid) {
+                            } else if (mustSeeWaitingBeforeNextBid) {
+                                // Our previous Confirm did not leave the screen.
+                                // Retry the real Confirm button instead of freezing forever.
+                                if (confirmRetryCount < 2) {
+                                    confirmRetryCount++;
+                                    status("Confirm ما زال ظاهر — إعادة ضغط " + confirmRetryCount + "/2");
+                                    clickConfirmSmart(ok -> {
+                                        if (ok) {
+                                            actionCooldownUntil =
+                                                    System.currentTimeMillis() + ACTION_DEBOUNCE_MS;
+                                            queueScan(ACTION_DEBOUNCE_MS + 120);
+                                        } else {
+                                            paused = true;
+                                            Prefs.setBotPaused(this, true);
+                                            status("تعذر ضغط Confirm — PAUSE");
+                                        }
+                                    });
+                                } else {
+                                    paused = true;
+                                    Prefs.setBotPaused(this, true);
+                                    status("Confirm لم يستجب بعد محاولتين — PAUSE");
+                                }
+                            } else {
                                 status("OCR: «تأكيد المزايدة» = دورنا");
                                 readAuctionSnapshot(true);
                             }
