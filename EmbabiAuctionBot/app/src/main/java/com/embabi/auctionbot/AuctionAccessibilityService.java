@@ -395,6 +395,14 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
+        // In a live auction, DO NOT trust WebView turn labels from Accessibility.
+        // The recorded videos showed stale/misleading "انتظار المزايدة" text while
+        // the real rendered button was "تأكيد المزايدة". Read the actual button.
+        if (activeAuction) {
+            verifyTurnLabelByOcr();
+            return;
+        }
+
         // ---------- Normal navigation ----------
         if (!activeAuction) {
             if (containsAny(all, "هاتلي منافس", "هات لي منافس", "find opponent")) {
@@ -448,8 +456,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 "دورك", "دورك الان", "دورك الآن",
                 "الدور انت", "الدور: انت", "your turn");
 
-        if ((waitingBidText && !confirmBidText && !myTurnText) ||
-                (opponentTurnText && !confirmBidText && !myTurnText)) {
+        if (false && ((waitingBidText && !confirmBidText && !myTurnText) ||
+                (opponentTurnText && !confirmBidText && !myTurnText))) {
             if (awaitingConfirm) {
                 cancelBidFlow();
                 paused = true;
@@ -467,7 +475,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
-        if (confirmBidText || myTurnText) {
+        if (false && (confirmBidText || myTurnText)) {
             if (awaitingConfirm) {
                 status("بعد + ما زال «تأكيد المزايدة» ظاهر ✓ — أضغط Confirm");
                 verifyConfirmReady(root);
@@ -1177,13 +1185,13 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if (mine == null || mine < 0 || mine > 100) {
             mine = (lastMine != null && lastMine >= 0 && lastMine <= 100)
                     ? lastMine
-                    : (currentRound() == 1 ? 100 : null);
+                    : 100;
         }
 
         if (opp == null || opp < 0 || opp > 100) {
             opp = (lastOpp != null && lastOpp >= 0 && lastOpp <= 100)
                     ? lastOpp
-                    : (currentRound() == 1 ? 100 : null);
+                    : 100;
         }
 
         boolean valid = rating != null && rating >= 80 && rating <= 99 &&
