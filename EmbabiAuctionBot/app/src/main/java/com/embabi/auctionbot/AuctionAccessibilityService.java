@@ -603,17 +603,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 return;
             }
 
-            postMatchSwipeAttempts++;
-            if (postMatchSwipeAttempts > 45) {
-                paused = true;
-                Prefs.setBotPaused(this, true);
-                status("دورت 45 مرة ومش لاقي «عرض التشكيلات/النتائج» — PAUSE");
-                return;
-            }
-
-            status("مش ظاهر — Swipe لتحت #" + postMatchSwipeAttempts +
-                    " وأعيد البحث عن «عرض التشكيلات/النتائج»");
-            swipePageDown();
+            scanPostMatchByOcr();
             return;
         }
 
@@ -638,17 +628,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 return;
             }
 
-            postMatchSwipeAttempts++;
-            if (postMatchSwipeAttempts > 45) {
-                paused = true;
-                Prefs.setBotPaused(this, true);
-                status("دورت 45 مرة ومش لاقي «العودة للرئيسية» — PAUSE");
-                return;
-            }
-
-            status("بعد التشكيلات — Swipe لتحت #" + postMatchSwipeAttempts +
-                    " وأدور على «العودة للرئيسية»");
-            swipePageDown();
+            scanPostMatchByOcr();
             return;
         }
 
