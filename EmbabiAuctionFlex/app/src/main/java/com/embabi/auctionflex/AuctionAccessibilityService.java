@@ -93,6 +93,11 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private final int[] sampleRound={-1,-1,-1};
     private final String[] samplePosition={"","",""};
     private int sampleIndex=0, sampleCount=0;
+    private static final long TURN_SETTLE_MS=2000L;
+    private int observedTurn=0; // 0 unknown, 1 ours, 2 opponent
+    private long turnStableAfter=0L;
+    private long playerStableAfter=0L;
+
 
 
     private final Runnable monitor=new Runnable() {
@@ -171,6 +176,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
         startedAt=System.currentTimeMillis();
         lastProgressAt=startedAt;
         auctionActive=false;
+        observedTurn=0;
+        turnStableAfter=0;
+        playerStableAfter=0;
         resetCardConsensus();
         Prefs.setCurrentRound(this,1); Prefs.setMatches(this,0); Prefs.setStartedAt(this,startedAt);
         status("RUN — افتح Embabi Games، سأتعرف على الشاشة تلقائياً");
@@ -284,6 +292,10 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 Prefs.setCurrentRound(this,round);
                 if(pending!=Pending.NONE && guiRound!=pendingRound) clearPending();
                 resetVisiblePlayerRead();
+                observedTurn=0;
+                long settleNow=System.currentTimeMillis();
+                playerStableAfter=settleNow+TURN_SETTLE_MS;
+                turnStableAfter=playerStableAfter;
                 markProgress();
             }
         }
@@ -324,6 +336,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 return;
             }
             round=1; Prefs.setCurrentRound(this,1); pending=Pending.NONE;
+            observedTurn=0; playerStableAfter=0; turnStableAfter=0;
             status("الرئيسية ✓ — أضغط «العب الآن»");
             clickText(root,"العب الان","العب الآن","play now");
             return;
@@ -354,6 +367,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void handleAuction(AccessibilityNodeInfo root,String all,Integer guiRound) {
+        // Every change of player OR turn must be stable for 2 seconds before acting.
+        if(waitForTurnStability(root,all)) return;
+
         // A SKIP decision survives the opening round. The starter cannot skip.
         if(skipWhenAllowed) {
             if(guiRound!=null && guiRound!=skipWhenAllowedRound) {
@@ -429,6 +445,39 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
 
         readCardAndAct(root,all,guiRound);
+    }
+
+    private int detectTurnState(AccessibilityNodeInfo root,String all) {
+        if(root==null) return 0;
+        AccessibilityNodeInfo confirm=findTextNode(root,
+                "تأكيد المزايدة","تاكيد المزايده","تأكيد مزايدة","confirm bid");
+        boolean confirmEnabled=confirm!=null && confirm.isVisibleToUser() && effectiveEnabled(confirm);
+        if(confirmEnabled) return 1;
+        if(containsAny(all,"انتظار المزايدة","انتظار المزايده","waiting bid","waiting for bid")) return 2;
+        return 0;
+    }
+
+    private boolean waitForTurnStability(AccessibilityNodeInfo root,String all) {
+        long now=System.currentTimeMillis();
+        int turn=detectTurnState(root,all);
+
+        if(turn!=0 && turn!=observedTurn) {
+            observedTurn=turn;
+            turnStableAfter=now+TURN_SETTLE_MS;
+            resetCardConsensus();
+            status(turn==1
+                    ? "اتغير الدور → دورنا، أنتظر ثانيتين للتأكد قبل أي قراءة/ضغط"
+                    : "اتغير الدور → دور الخصم، أنتظر ثانيتين للتأكد");
+            return true;
+        }
+
+        long until=Math.max(turnStableAfter,playerStableAfter);
+        if(now<until) {
+            long ms=until-now;
+            status("تثبيت الشاشة والدور… "+Math.max(1,(ms+999)/1000)+" ث");
+            return true;
+        }
+        return false;
     }
 
     private boolean isOurTurn(AccessibilityNodeInfo root,String all) {
@@ -1079,6 +1128,99 @@ public class AuctionAccessibilityService extends AccessibilityService {
         return b.toString();
     }
 
+    private Bitmap otsuOcrVariant(Bitmap src,boolean inverse) {
+        if(src==null) return null;
+        try {
+            int w=src.getWidth(), h=src.getHeight();
+            int[] px=new int[w*h];
+            src.getPixels(px,0,w,0,0,w,h);
+
+            int[] hist=new int[256];
+            for(int color:px) {
+                int y=(Color.red(color)*299+Color.green(color)*587+Color.blue(color)*114)/1000;
+                hist[y]++;
+            }
+
+            int total=px.length;
+            long sum=0;
+            for(int i=0;i<256;i++) sum+=(long)i*hist[i];
+
+            long sumB=0;
+            int wB=0;
+            double best=-1;
+            int threshold=128;
+
+            for(int t=0;t<256;t++) {
+                wB+=hist[t];
+                if(wB==0) continue;
+                int wF=total-wB;
+                if(wF==0) break;
+
+                sumB+=(long)t*hist[t];
+                double mB=sumB/(double)wB;
+                double mF=(sum-sumB)/(double)wF;
+                double between=(double)wB*wF*(mB-mF)*(mB-mF);
+                if(between>best) {
+                    best=between;
+                    threshold=t;
+                }
+            }
+
+            for(int i=0;i<px.length;i++) {
+                int color=px[i];
+                int y=(Color.red(color)*299+Color.green(color)*587+Color.blue(color)*114)/1000;
+                boolean light=y>=threshold;
+                if(inverse) light=!light;
+                px[i]=light?Color.WHITE:Color.BLACK;
+            }
+
+            Bitmap out=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888);
+            out.setPixels(px,0,w,0,0,w,h);
+            return out;
+        } catch(Exception e) {
+            return null;
+        }
+    }
+
+    private Bitmap goldOcrVariant(Bitmap src) {
+        if(src==null) return null;
+        try {
+            int w=src.getWidth(), h=src.getHeight();
+            int[] px=new int[w*h];
+            src.getPixels(px,0,w,0,0,w,h);
+            int goldCount=0;
+
+            for(int i=0;i<px.length;i++) {
+                int color=px[i];
+                int r=Color.red(color), g=Color.green(color), b=Color.blue(color);
+
+                // Game's gold/yellow glyphs: warm, saturated, much less blue than R/G.
+                boolean gold=
+                        r>=125 && g>=80 &&
+                        (r-b)>=55 && (g-b)>=28 &&
+                        r>=g-20 &&
+                        b<=155;
+
+                if(gold) {
+                    px[i]=Color.BLACK;
+                    goldCount++;
+                } else {
+                    px[i]=Color.WHITE;
+                }
+            }
+
+            float ratio=goldCount/(float)Math.max(1,px.length);
+            // Reject masks with almost no signal or masks flooded by artwork/skin.
+            if(ratio<0.015f || ratio>0.42f) return null;
+
+            Bitmap out=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888);
+            out.setPixels(px,0,w,0,0,w,h);
+            return out;
+        } catch(Exception e) {
+            return null;
+        }
+    }
+
     private Bitmap thresholdOcrVariant(Bitmap src,int threshold,boolean inverse) {
         if(src==null) return null;
         try {
@@ -1154,8 +1296,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
             }
             if(bestVotes==0) return null;
             if(bestVotes>=2 && bestVotes>second) return best;
-            if(bestVotes==1 && second==0) return best; // temporal consensus still required later
-            return null; // conflicting OCR variants: do not guess
+            return null; // one OCR variant is never enough for a rating decision // conflicting OCR variants: do not guess
         }
 
         int winnerVotes() {
@@ -1257,8 +1398,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         // User still calibrates ONE rectangle. Internally split it:
         // upper area = rating, lower area = position, with overlap for different card skins.
-        Bitmap ratingCrop=cropRelative(scaled,0f,0f,1f,.68f);
-        Bitmap posCrop=cropRelative(scaled,0f,.43f,1f,1f);
+        Bitmap ratingCrop=cropRelative(scaled,0f,0f,1f,.58f);
+        Bitmap posCrop=cropRelative(scaled,0f,.45f,1f,1f);
         scaled.recycle();
 
         RatingVotes rv=new RatingVotes();
@@ -1300,19 +1441,27 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private ArrayList<Bitmap> buildRatingVariants(Bitmap src) {
         ArrayList<Bitmap> v=new ArrayList<>();
         if(src==null) return v;
+
+        // Independent families: original, Otsu, grayscale thresholds, gold mask.
         v.add(src);
-        Bitmap a=thresholdOcrVariant(src,105,false);
-        Bitmap b=thresholdOcrVariant(src,135,false);
-        Bitmap d=thresholdOcrVariant(src,170,false);
-        Bitmap e=binaryOcrVariant(src,false);
-        Bitmap f=binaryOcrVariant(src,true);
-        Bitmap g=saturationOcrVariant(src);
-        if(a!=null)v.add(a);
-        if(b!=null)v.add(b);
-        if(d!=null)v.add(d);
-        if(e!=null)v.add(e);
-        if(f!=null)v.add(f);
-        if(g!=null)v.add(g);
+
+        Bitmap otsu=otsuOcrVariant(src,false);
+        Bitmap a=thresholdOcrVariant(src,110,false);
+        Bitmap b=thresholdOcrVariant(src,145,false);
+        Bitmap inv=binaryOcrVariant(src,true);
+        Bitmap gold=goldOcrVariant(src);
+
+        if(otsu!=null) v.add(otsu);
+        if(a!=null) v.add(a);
+        if(b!=null) v.add(b);
+        if(inv!=null) v.add(inv);
+
+        // Gold mask is highly specific; give it extra independent weight when valid.
+        if(gold!=null) {
+            v.add(gold);
+            try { v.add(gold.copy(Bitmap.Config.ARGB_8888,false)); } catch(Exception ignored) {}
+            try { v.add(gold.copy(Bitmap.Config.ARGB_8888,false)); } catch(Exception ignored) {}
+        }
         return v;
     }
 
@@ -1462,7 +1611,6 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 .replace('I','1')
                 .replace('L','1')
                 .replace('Z','2')
-                .replace('S','5')
                 .replace('G','6')
                 .replace('B','8');
 
