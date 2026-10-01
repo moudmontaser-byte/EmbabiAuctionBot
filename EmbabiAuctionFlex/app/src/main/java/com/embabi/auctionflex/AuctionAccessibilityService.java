@@ -479,7 +479,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 // Keep the user's combined Rating+Position box as the main ROI.
                 // Only a small tolerance is added so card artwork doesn't flood the OCR.
                 RectF exact=Prefs.getRegion(AuctionAccessibilityService.this,"card");
-                RectF cardRegion=expandRegion(exact,.08f,.08f);
+                RectF cardRegion=exact;
 
                 recognizer.process(InputImage.fromBitmap(copy,0))
                         .addOnSuccessListener(tx->{
@@ -494,17 +494,10 @@ public class AuctionAccessibilityService extends AccessibilityService {
                             readCardRobust(cardCrop,seed,card->{
                                 screenshotBusy=false;
                                 Integer rating=card==null?null:card.rating;
-                                String pos=card==null?null:card.position;
-
-                                // Position is secondary safety. If OCR misses ST/CB/CM/GK but
-                                // the game's own 1/5..5/5 indicator is readable, infer the
-                                // fixed expected position. If OCR returns a CONTRADICTING
-                                // position we still stop.
-                                boolean posInferred=false;
-                                if(pos==null && guiRound!=null && guiRound>=1 && guiRound<=5) {
-                                    pos=Prefs.EXPECTED_POSITIONS[guiRound-1];
-                                    posInferred=true;
-                                }
+                                int posRound=(guiRound!=null && guiRound>=1 && guiRound<=5)?guiRound:round;
+                                String pos=(posRound>=1 && posRound<=5)
+                                        ? Prefs.EXPECTED_POSITIONS[posRound-1] : null;
+                                boolean posInferred=true;
 
                                 lastRating=rating==null?-1:rating;
                                 lastPosition=pos==null?"—":pos;
@@ -522,24 +515,13 @@ public class AuctionAccessibilityService extends AccessibilityService {
                                     return;
                                 }
 
-                                if(guiRound!=null && guiRound>=1 && guiRound<=5) {
-                                    String expected=Prefs.EXPECTED_POSITIONS[guiRound-1];
-                                    if(!expected.equals(pos)) {
-                                        resetCardConsensus();
-                                        status("رفض قراءة متعارضة: "+pos+" لكن "+guiRound+
-                                                "/5 متوقع "+expected+" — لا أضغط");
-                                        return;
-                                    }
-                                }
-
                                 int effectiveRound=(guiRound!=null && guiRound>=1 && guiRound<=5)
                                         ? guiRound : round;
                                 CardRead stable=addConsensusSample(rating,pos,price,effectiveRound);
 
                                 if(stable==null) {
-                                    status("أثبت القراءة… "+pos+" OVR "+rating+" • "+price+"M"+
-                                            (posInferred?" (المركز من "+guiRound+"/5)":"")+
-                                            " — أحتاج تطابق قراءتين");
+                                    status("أثبت القراءة… "+pos+" OVR "+rating+" • "+price+
+                                            "M — تحقق شكل الرقم + قراءة ثانية");
                                     return;
                                 }
 
@@ -1235,47 +1217,33 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if(crop==null) {
             CardRead out=new CardRead();
             out.rating=extractRatingStrict(seed);
-            out.position=extractPosition(seed);
+            out.position=null;
             out.raw=seed==null?"":seed;
             cb.done(out);
             return;
         }
 
-        Bitmap scaled;
-        try {
-            int scale=5;
-            scaled=Bitmap.createScaledBitmap(crop,
-                    Math.max(1,crop.getWidth()*scale),
-                    Math.max(1,crop.getHeight()*scale),true);
-        } catch(Exception e) {
-            crop.recycle();
+        // v32 primary reader: shape recognition, not OCR.
+        // HOG features are based on edges/geometry, so white, light-gold and dark-gold
+        // versions of the same number are treated as the same shape.
+        DigitShapeClassifier.RatingResult shape=DigitShapeClassifier.predictRating(crop);
+        if(shape!=null) {
             CardRead out=new CardRead();
-            out.rating=extractRatingStrict(seed);
-            out.position=extractPosition(seed);
-            out.raw=seed==null?"":seed;
+            out.rating=shape.rating;
+            out.position=null;
+            out.raw="shape:"+shape.rating+" conf="+shape.confidence;
+            crop.recycle();
             cb.done(out);
             return;
         }
-        crop.recycle();
 
-        // Same single calibration box. Internally we isolate the two real text zones.
-        // Rating is always the upper-left block; face/card art starts to its right.
-        Bitmap ratingCrop=cropRelative(scaled,0f,0f,.82f,.58f);
-        Bitmap posCrop=cropRelative(scaled,0f,.40f,.86f,1f);
-        scaled.recycle();
-
-        readRatingSimple(ratingCrop,seed,rating->{
-            PositionVotes pv=new PositionVotes();
-            pv.add(extractPosition(seed));
-
-            ArrayList<Bitmap> positionVariants=buildPositionVariants(posCrop);
-            recognizePositionVariants(positionVariants,0,pv,()->{
-                CardRead out=new CardRead();
-                out.rating=rating;
-                out.position=pv.winner();
-                out.raw="simple-rating";
-                cb.done(out);
-            });
+        // Conservative fallback only if the shape model is unsure.
+        readRatingSimple(crop,seed,rating->{
+            CardRead out=new CardRead();
+            out.rating=rating;
+            out.position=null;
+            out.raw="ocr-fallback";
+            cb.done(out);
         });
     }
 
@@ -1545,12 +1513,12 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if(raw==null) return null;
 
         String s=toWestern(raw.toUpperCase(Locale.US));
-        Matcher m=Pattern.compile("(?<!\\d)([5-9]\\d)(?!\\d)").matcher(s);
+        Matcher m=Pattern.compile("(?<!\\d)([7-9]\\d)(?!\\d)").matcher(s);
 
         while(m.find()) {
             try {
                 int v=Integer.parseInt(m.group(1));
-                if(v>=50 && v<=99) return v;
+                if(v>=70 && v<=99) return v;
             } catch(Exception ignored) {}
         }
 
@@ -1829,7 +1797,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private String calibrationLabel() {
         switch(calibrationStep) {
-            case 0:return "1/5 — ارسم مربع واحد حول التقييم والمركز معًا (مثلاً 89 وفوق/تحتها CM)";
+            case 0:return "1/5 — ارسم مربع ضيق حول رقم التقييم فقط (مثلاً 89 فقط، بدون CM وبدون وجه اللاعب)";
             case 1:return "2/5 — ارسم مربع حول قيمة المزايدة الحالية فقط";
             case 2:return "3/5 — المس منتصف زر +";
             case 3:return "4/5 — المس منتصف زر «تأكيد المزايدة»";
@@ -1887,7 +1855,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 c.drawRect(0,sel.top,sel.left,sel.bottom,shade);
                 c.drawRect(sel.right,sel.top,getWidth(),sel.bottom,shade);
                 c.drawRoundRect(sel,dp(8),dp(8),border);
-                c.drawText(calibrationStep==0?"OVR + POS":"PRICE",
+                c.drawText(calibrationStep==0?"RATING ONLY":"PRICE",
                         sel.left+dp(5),Math.max(dp(92),sel.top-dp(5)),label);
             } else if(calibrationStep>=2) {
                 String tap=calibrationStep==2?"TAP +":
