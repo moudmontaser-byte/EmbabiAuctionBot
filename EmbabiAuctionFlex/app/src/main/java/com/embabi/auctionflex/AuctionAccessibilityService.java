@@ -458,7 +458,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         if(maxBid<=0) {
             requestSkipRespectingOpening(price,openingRound,skipEnabled,
-                    "R"+round+" "+pos+" OVR "+rating+" خارج الـ3 Ranges");
+                    "R"+round+" "+pos+" OVR "+rating+" خارج الـ4 Ranges");
             return;
         }
 
@@ -593,6 +593,34 @@ public class AuctionAccessibilityService extends AccessibilityService {
     // ---------- Post auction / simulation / result loop ----------
 
     private boolean handlePostFlow(AccessibilityNodeInfo root,String all) {
+        // Special fast-win path: opponent disconnects/leaves the match.
+        // This screen already contains "العودة للرئيسية", so skip the normal
+        // simulation/results sequence and return home immediately.
+        if(containsAny(all,
+                "خصمك خرج من المباراة",
+                "خصمك خرج من المباراه",
+                "فزت بالانسحاب",
+                "فزت بالإنسحاب",
+                "opponent left the match",
+                "opponent disconnected")) {
+            postFlow=true;
+            postStage=5;
+            clearPending();
+            skipWhenAllowed=false;
+            skipWhenAllowedRound=0;
+
+            if(clickText(root,
+                    "العودة للرئيسية","العوده للرئيسيه",
+                    "return home","return to main")) {
+                onMatchDone();
+                status("الخصم خرج من المباراة ✓ — العودة للرئيسية");
+            } else {
+                status("الخصم خرج من المباراة — أبحث عن «العودة للرئيسية»");
+                safePostScroll();
+            }
+            return true;
+        }
+
         if(containsAny(all,"جاري تعيين المدربين","جار تعيين المدربين","assigning coaches")) {
             postFlow=true; postStage=1; clearPending();
             status("جاري تعيين المدربين… أنتظر");
