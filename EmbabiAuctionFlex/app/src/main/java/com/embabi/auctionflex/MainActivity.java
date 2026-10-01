@@ -85,7 +85,7 @@ public class MainActivity extends Activity {
         access.setOnClickListener(v->startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
         service.addView(access,marginTop(8));
 
-        Button cal=button("CAL — Rating / Position / Price / + / Confirm / Skip",Color.rgb(65,82,180));
+        Button cal=button("CAL — (Rating + Position) / Price / + / Confirm / Skip",Color.rgb(65,82,180));
         cal.setOnClickListener(v->send(BotActions.CALIBRATE));
         service.addView(cal,marginTop(7));
 
@@ -126,7 +126,7 @@ public class MainActivity extends Activity {
                 box.addView(row,marginTop(5));
             }
 
-            TextView note=text("خارج الـ3 Ranges = SKIP تلقائي",11.5f,Color.rgb(140,163,190),false);
+            TextView note=text("خارج الـ3 Ranges = SKIP • لو أنت تبدأ اللاعب: 1M فقط أولاً ثم Skip",11.5f,Color.rgb(140,163,190),false);
             note.setPadding(0,dp(6),0,0);
             box.addView(note);
             root.addView(box,marginTop(8));
