@@ -10,6 +10,7 @@ public final class Prefs {
     private static final int CAL_SCHEMA = 21;
     public static final String[] SLOT_NAMES = {"GK", "CB", "CM1", "CM2", "ST"};
     public static final String[] EXPECTED_POSITIONS = {"GK", "CB", "CM", "CM", "ST"};
+    public static final int RANGE_COUNT = 4;
 
     private Prefs() {}
 
@@ -22,25 +23,25 @@ public final class Prefs {
     }
 
     public static int getRangeMin(Context c, int slot, int range) {
-        slot = clamp(slot,0,4); range = clamp(range,0,2);
-        int[] d = {90,88,86};
+        slot = clamp(slot,0,4); range = clamp(range,0,RANGE_COUNT-1);
+        int[] d = {90,88,86,50};
         return sp(c).getInt("rmin_"+slot+"_"+range, d[range]);
     }
 
     public static int getRangeMax(Context c, int slot, int range) {
-        slot = clamp(slot,0,4); range = clamp(range,0,2);
-        int[] d = {99,89,87};
+        slot = clamp(slot,0,4); range = clamp(range,0,RANGE_COUNT-1);
+        int[] d = {99,89,87,50};
         return sp(c).getInt("rmax_"+slot+"_"+range, d[range]);
     }
 
     public static int getMaxBid(Context c, int slot, int range) {
-        slot = clamp(slot,0,4); range = clamp(range,0,2);
-        int[] d = {20,15,10};
+        slot = clamp(slot,0,4); range = clamp(range,0,RANGE_COUNT-1);
+        int[] d = {20,15,10,0};
         return sp(c).getInt("bid_"+slot+"_"+range, d[range]);
     }
 
     public static void setRange(Context c, int slot, int range, int min, int max, int bid) {
-        slot = clamp(slot,0,4); range = clamp(range,0,2);
+        slot = clamp(slot,0,4); range = clamp(range,0,RANGE_COUNT-1);
         min = clamp(min,50,99); max = clamp(max,50,99);
         if (min > max) { int t=min; min=max; max=t; }
         bid = clamp(bid,0,100);
