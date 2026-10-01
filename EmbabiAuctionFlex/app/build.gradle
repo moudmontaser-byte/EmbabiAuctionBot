@@ -10,8 +10,8 @@ android {
         applicationId "com.embabi.auctionflex"
         minSdk 30
         targetSdk 35
-        versionCode 220
-        versionName "22.0-four-ranges-disconnect"
+        versionCode 230
+        versionName "23.0-gold-card-ocr"
     }
 
     compileOptions {
