@@ -1235,7 +1235,6 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if(crop==null) {
             CardRead out=new CardRead();
             out.rating=extractRatingStrict(seed);
-            if(out.rating==null) out.rating=extractRatingFuzzy(seed);
             out.position=extractPosition(seed);
             out.raw=seed==null?"":seed;
             cb.done(out);
@@ -1250,35 +1249,31 @@ public class AuctionAccessibilityService extends AccessibilityService {
                     Math.max(1,crop.getHeight()*scale),true);
         } catch(Exception e) {
             crop.recycle();
-            cb.done(parseCard(seed));
+            CardRead out=new CardRead();
+            out.rating=extractRatingStrict(seed);
+            out.position=extractPosition(seed);
+            out.raw=seed==null?"":seed;
+            cb.done(out);
             return;
         }
         crop.recycle();
 
-        // User still calibrates ONE rectangle. Internally split it:
-        // upper area = rating, lower area = position, with overlap for different card skins.
-        Bitmap ratingCrop=cropRelative(scaled,0f,0f,1f,.68f);
-        Bitmap posCrop=cropRelative(scaled,0f,.43f,1f,1f);
+        // Same single calibration box. Internally we isolate the two real text zones.
+        // Rating is always the upper-left block; face/card art starts to its right.
+        Bitmap ratingCrop=cropRelative(scaled,0f,0f,.82f,.58f);
+        Bitmap posCrop=cropRelative(scaled,0f,.40f,.86f,1f);
         scaled.recycle();
 
-        RatingVotes rv=new RatingVotes();
-        PositionVotes pv=new PositionVotes();
+        readRatingSimple(ratingCrop,seed,rating->{
+            PositionVotes pv=new PositionVotes();
+            pv.add(extractPosition(seed));
 
-        // Seed from the exact calibrated box gets only one vote.
-        Integer seedRating=extractRatingStrict(seed);
-        if(seedRating==null) seedRating=extractRatingFuzzy(seed);
-        rv.add(seedRating,seed);
-        pv.add(extractPosition(seed));
-
-        ArrayList<Bitmap> ratingVariants=buildRatingVariants(ratingCrop);
-        ArrayList<Bitmap> positionVariants=buildPositionVariants(posCrop);
-
-        recognizeRatingVariants(ratingVariants,0,rv,()->{
+            ArrayList<Bitmap> positionVariants=buildPositionVariants(posCrop);
             recognizePositionVariants(positionVariants,0,pv,()->{
                 CardRead out=new CardRead();
-                out.rating=rv.winner();
+                out.rating=rating;
                 out.position=pv.winner();
-                out.raw="ratingVotes="+rv.winnerVotes();
+                out.raw="simple-rating";
                 cb.done(out);
             });
         });
@@ -1331,28 +1326,147 @@ public class AuctionAccessibilityService extends AccessibilityService {
         return v;
     }
 
-    private void recognizeRatingVariants(ArrayList<Bitmap> variants,int index,
-                                         RatingVotes votes,Runnable done) {
-        if(index>=variants.size()) {
-            done.run();
+    private void readRatingSimple(Bitmap ratingCrop,String seed,SimpleIntResult cb) {
+        if(ratingCrop==null) {
+            cb.done(extractRatingStrict(seed));
             return;
         }
 
-        Bitmap img=variants.get(index);
-        recognizer.process(InputImage.fromBitmap(img,0))
+        Bitmap gold=goldRatingMaskStrict(ratingCrop);
+        if(gold!=null) {
+            recognizer.process(InputImage.fromBitmap(gold,0))
+                    .addOnSuccessListener(tx->{
+                        Integer rating=extractRatingStrict(tx.getText());
+                        gold.recycle();
+
+                        if(rating!=null) {
+                            ratingCrop.recycle();
+                            cb.done(rating);
+                        } else {
+                            readRatingOriginalStrict(ratingCrop,seed,cb);
+                        }
+                    })
+                    .addOnFailureListener(e->{
+                        gold.recycle();
+                        readRatingOriginalStrict(ratingCrop,seed,cb);
+                    });
+        } else {
+            readRatingOriginalStrict(ratingCrop,seed,cb);
+        }
+    }
+
+    private void readRatingOriginalStrict(Bitmap ratingCrop,String seed,SimpleIntResult cb) {
+        recognizer.process(InputImage.fromBitmap(ratingCrop,0))
                 .addOnSuccessListener(tx->{
-                    String raw=tx.getText();
-                    Integer rating=extractRatingStrict(raw);
-                    if(rating==null) rating=extractRatingFuzzy(raw);
-                    votes.add(rating,raw);
-                    img.recycle();
-                    recognizeRatingVariants(variants,index+1,votes,done);
+                    Integer rating=extractRatingStrict(tx.getText());
+                    if(rating==null) rating=extractRatingStrict(seed);
+                    ratingCrop.recycle();
+                    cb.done(rating);
                 })
                 .addOnFailureListener(e->{
-                    img.recycle();
-                    recognizeRatingVariants(variants,index+1,votes,done);
+                    Integer rating=extractRatingStrict(seed);
+                    ratingCrop.recycle();
+                    cb.done(rating);
                 });
     }
+
+    private Bitmap goldRatingMaskStrict(Bitmap src) {
+        if(src==null) return null;
+
+        try {
+            int w=src.getWidth(), h=src.getHeight();
+            int[] px=new int[w*h];
+            src.getPixels(px,0,w,0,0,w,h);
+
+            boolean[] on=new boolean[px.length];
+            int count=0;
+
+            for(int i=0;i<px.length;i++) {
+                int color=px[i];
+                int r=Color.red(color), g=Color.green(color), b=Color.blue(color);
+
+                int max=Math.max(r,Math.max(g,b));
+                int min=Math.min(r,Math.min(g,b));
+                int delta=max-min;
+                if(max<80 || delta<24) continue;
+
+                float sat=delta/(float)Math.max(1,max);
+                float hue;
+
+                if(max==r) {
+                    hue=60f*((g-b)/(float)Math.max(1,delta));
+                    if(hue<0) hue+=360f;
+                } else if(max==g) {
+                    hue=60f*(2f+(b-r)/(float)Math.max(1,delta));
+                } else {
+                    hue=60f*(4f+(r-g)/(float)Math.max(1,delta));
+                }
+
+                // Empirically tuned on the user's failed white/gold cards:
+                // 86,87,88,90,91. It accepts bronze->yellow gold, not white marble.
+                boolean gold =
+                        hue>=14f && hue<=72f &&
+                        sat>=0.48f &&
+                        max>=90 &&
+                        (r-b)>=38 &&
+                        (g-b)>=14;
+
+                on[i]=gold;
+                if(gold) count++;
+            }
+
+            float ratio=count/(float)Math.max(1,px.length);
+            if(ratio<0.018f || ratio>0.46f) return null;
+
+            // One small density cleanup only. No threshold voting, no fuzzy guesses.
+            int[] out=new int[px.length];
+            int kept=0;
+
+            for(int y=0;y<h;y++) {
+                for(int x=0;x<w;x++) {
+                    int idx=y*w+x;
+
+                    if(!on[idx]) {
+                        out[idx]=Color.WHITE;
+                        continue;
+                    }
+
+                    int n=0;
+                    for(int yy=Math.max(0,y-1);yy<=Math.min(h-1,y+1);yy++) {
+                        for(int xx=Math.max(0,x-1);xx<=Math.min(w-1,x+1);xx++) {
+                            if(on[yy*w+xx]) n++;
+                        }
+                    }
+
+                    if(n>=4) {
+                        out[idx]=Color.BLACK;
+                        kept++;
+                    } else {
+                        out[idx]=Color.WHITE;
+                    }
+                }
+            }
+
+            if(kept<Math.max(30,px.length/180)) return null;
+
+            // Add a clean white margin around the digits before OCR.
+            Bitmap mask=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888);
+            mask.setPixels(out,0,w,0,0,w,h);
+
+            int pad=Math.max(12,Math.min(w,h)/10);
+            Bitmap padded=Bitmap.createBitmap(w+pad*2,h+pad*2,Bitmap.Config.ARGB_8888);
+            Canvas canvas=new Canvas(padded);
+            canvas.drawColor(Color.WHITE);
+            canvas.drawBitmap(mask,pad,pad,null);
+            mask.recycle();
+
+            return padded;
+        } catch(Exception e) {
+            return null;
+        }
+    }
+
+    private interface SimpleIntResult { void done(Integer value); }
 
     private void recognizePositionVariants(ArrayList<Bitmap> variants,int index,
                                            PositionVotes votes,Runnable done) {
@@ -1419,14 +1533,37 @@ public class AuctionAccessibilityService extends AccessibilityService {
         CardRead out=new CardRead();
         out.raw=raw==null?"":raw;
         out.rating=extractRatingStrict(out.raw);
-        if(out.rating==null) out.rating=extractRatingFuzzy(out.raw);
         out.position=extractPosition(out.raw);
         return out;
     }
 
     private Integer extractRating(String raw) {
-        Integer v=extractRatingStrict(raw);
-        return v!=null?v:extractRatingFuzzy(raw);
+        return extractRatingStrict(raw);
+    }
+
+    private Integer extractRatingStrict(String raw) {
+        if(raw==null) return null;
+
+        String s=toWestern(raw.toUpperCase(Locale.US));
+        Matcher m=Pattern.compile("(?<!\\d)([5-9]\\d)(?!\\d)").matcher(s);
+
+        while(m.find()) {
+            try {
+                int v=Integer.parseInt(m.group(1));
+                if(v>=50 && v<=99) return v;
+            } catch(Exception ignored) {}
+        }
+
+        // Allow "9 0" / "9\n0", but only if there are exactly two real digits.
+        String digits=s.replaceAll("[^0-9]","");
+        if(digits.length()==2) {
+            try {
+                int v=Integer.parseInt(digits);
+                if(v>=50 && v<=99) return v;
+            } catch(Exception ignored) {}
+        }
+
+        return null;
     }
 
     private Integer extractRatingStrict(String raw) {
