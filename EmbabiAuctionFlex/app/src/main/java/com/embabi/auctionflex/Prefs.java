@@ -7,7 +7,7 @@ import android.graphics.RectF;
 
 public final class Prefs {
     private static final String NAME = "embabi_flex_v20";
-    private static final int CAL_SCHEMA = 20;
+    private static final int CAL_SCHEMA = 21;
     public static final String[] SLOT_NAMES = {"GK", "CB", "CM1", "CM2", "ST"};
     public static final String[] EXPECTED_POSITIONS = {"GK", "CB", "CM", "CM", "ST"};
 
@@ -108,7 +108,7 @@ public final class Prefs {
 
     public static void clearCalibration(Context c) {
         SharedPreferences.Editor e=sp(c).edit();
-        for(String k:new String[]{"rating","position","price"}) {
+        for(String k:new String[]{"card","rating","position","price"}) {
             e.remove("roi_"+k).remove("l_"+k).remove("t_"+k).remove("r_"+k).remove("b_"+k);
         }
         for(String k:new String[]{"plus","confirm","skip"}) {
@@ -121,7 +121,7 @@ public final class Prefs {
 
     public static boolean isCalibrated(Context c) {
         if (sp(c).getInt("cal_schema",0)!=CAL_SCHEMA) return false;
-        for(String k:new String[]{"rating","position","price"}) if(getRegion(c,k)==null) return false;
+        for(String k:new String[]{"card","price"}) if(getRegion(c,k)==null) return false;
         int w=c.getResources().getDisplayMetrics().widthPixels, h=c.getResources().getDisplayMetrics().heightPixels;
         for(String k:new String[]{"plus","confirm","skip"}) if(getTapPointPx(c,k,w,h)==null) return false;
         return true;
