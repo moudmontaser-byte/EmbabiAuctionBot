@@ -1260,7 +1260,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         // Same single calibration box. Internally we isolate the two real text zones.
         // Rating is always the upper-left block; face/card art starts to its right.
-        Bitmap ratingCrop=cropRelative(scaled,0f,0f,.82f,.58f);
+        Bitmap ratingCrop=cropRelative(scaled,0f,0f,.78f,.58f);
         Bitmap posCrop=cropRelative(scaled,0f,.40f,.86f,1f);
         scaled.recycle();
 
@@ -1327,47 +1327,113 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void readRatingSimple(Bitmap ratingCrop,String seed,SimpleIntResult cb) {
-        if(ratingCrop==null) {
-            cb.done(extractRatingStrict(seed));
+        // First accept a clean direct read if ML Kit already saw a valid 80..99 rating.
+        Integer direct=extractRatingStrict(seed);
+        if(direct!=null) {
+            if(ratingCrop!=null) ratingCrop.recycle();
+            cb.done(direct);
             return;
         }
 
-        Bitmap gold=goldRatingMaskStrict(ratingCrop);
-        if(gold!=null) {
-            recognizer.process(InputImage.fromBitmap(gold,0))
+        if(ratingCrop==null) {
+            cb.done(null);
+            return;
+        }
+
+        // Main path for the gold numbers:
+        // the user's own B/W example shows that a fixed gray threshold near 100
+        // makes the gold glyph outline very clear. Read ONLY the rating crop.
+        Bitmap bw=binaryRatingMask(ratingCrop,100);
+        if(bw!=null) {
+            recognizer.process(InputImage.fromBitmap(bw,0))
                     .addOnSuccessListener(tx->{
-                        Integer rating=extractRatingStrict(tx.getText());
-                        gold.recycle();
+                        Integer rating=extractRatingOnly(tx.getText());
+                        bw.recycle();
 
                         if(rating!=null) {
                             ratingCrop.recycle();
                             cb.done(rating);
                         } else {
-                            readRatingOriginalStrict(ratingCrop,seed,cb);
+                            readRatingOriginalStrict(ratingCrop,cb);
                         }
                     })
                     .addOnFailureListener(e->{
-                        gold.recycle();
-                        readRatingOriginalStrict(ratingCrop,seed,cb);
+                        bw.recycle();
+                        readRatingOriginalStrict(ratingCrop,cb);
                     });
         } else {
-            readRatingOriginalStrict(ratingCrop,seed,cb);
+            readRatingOriginalStrict(ratingCrop,cb);
         }
     }
 
-    private void readRatingOriginalStrict(Bitmap ratingCrop,String seed,SimpleIntResult cb) {
+    private void readRatingOriginalStrict(Bitmap ratingCrop,SimpleIntResult cb) {
         recognizer.process(InputImage.fromBitmap(ratingCrop,0))
                 .addOnSuccessListener(tx->{
-                    Integer rating=extractRatingStrict(tx.getText());
-                    if(rating==null) rating=extractRatingStrict(seed);
+                    Integer rating=extractRatingOnly(tx.getText());
                     ratingCrop.recycle();
                     cb.done(rating);
                 })
                 .addOnFailureListener(e->{
-                    Integer rating=extractRatingStrict(seed);
                     ratingCrop.recycle();
-                    cb.done(rating);
+                    cb.done(null);
                 });
+    }
+
+    private Bitmap binaryRatingMask(Bitmap src,int threshold) {
+        if(src==null) return null;
+        try {
+            int w=src.getWidth(), h=src.getHeight();
+            int[] px=new int[w*h];
+            src.getPixels(px,0,w,0,0,w,h);
+
+            for(int i=0;i<px.length;i++) {
+                int color=px[i];
+                int y=(Color.red(color)*299 + Color.green(color)*587 + Color.blue(color)*114)/1000;
+                px[i]=(y>=threshold)?Color.WHITE:Color.BLACK;
+            }
+
+            Bitmap core=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888);
+            core.setPixels(px,0,w,0,0,w,h);
+
+            // OCR is much happier when the number is not touching the crop boundary.
+            int pad=Math.max(14,Math.min(w,h)/8);
+            Bitmap out=Bitmap.createBitmap(w+pad*2,h+pad*2,Bitmap.Config.ARGB_8888);
+            Canvas canvas=new Canvas(out);
+            canvas.drawColor(Color.WHITE);
+            canvas.drawBitmap(core,pad,pad,null);
+            core.recycle();
+            return out;
+        } catch(Exception e) {
+            return null;
+        }
+    }
+
+    private Integer extractRatingOnly(String raw) {
+        Integer strict=extractRatingStrict(raw);
+        if(strict!=null) return strict;
+        if(raw==null) return null;
+
+        // This parser is used ONLY on the upper rating crop, never on GK/CB/CM/ST.
+        // So common OCR confusions are safe to repair here.
+        String s=toWestern(raw.toUpperCase(Locale.US))
+                .replace('O','0')
+                .replace('Q','0')
+                .replace('D','0')
+                .replace('I','1')
+                .replace('L','1')
+                .replace('Z','2')
+                .replace('S','5')
+                .replace('G','6')
+                .replace('B','8');
+
+        String digits=s.replaceAll("[^0-9]","");
+        for(int i=0;i+1<digits.length();i++) {
+            try {
+                int v=Integer.parseInt(digits.substring(i,i+2));
+                if(v>=80 && v<=99) return v;
+            } catch(Exception ignored) {}
+        }
+        return null;
     }
 
     private Bitmap goldRatingMaskStrict(Bitmap src) {
@@ -1545,24 +1611,22 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if(raw==null) return null;
 
         String s=toWestern(raw.toUpperCase(Locale.US));
-        Matcher m=Pattern.compile("(?<!\\d)([5-9]\\d)(?!\\d)").matcher(s);
+        Matcher m=Pattern.compile("(?<!\\d)([89]\\d)(?!\\d)").matcher(s);
 
         while(m.find()) {
             try {
                 int v=Integer.parseInt(m.group(1));
-                if(v>=50 && v<=99) return v;
+                if(v>=80 && v<=99) return v;
             } catch(Exception ignored) {}
         }
 
-        // Allow "9 0" / "9\n0", but only if there are exactly two real digits.
         String digits=s.replaceAll("[^0-9]","");
         if(digits.length()==2) {
             try {
                 int v=Integer.parseInt(digits);
-                if(v>=50 && v<=99) return v;
+                if(v>=80 && v<=99) return v;
             } catch(Exception ignored) {}
         }
-
         return null;
     }
 
