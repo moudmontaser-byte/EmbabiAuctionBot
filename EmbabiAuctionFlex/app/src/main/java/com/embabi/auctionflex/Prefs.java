@@ -12,6 +12,32 @@ public final class Prefs {
     public static final String[] EXPECTED_POSITIONS = {"GK", "CB", "CM", "CM", "ST"};
     public static final int RANGE_COUNT = 4;
 
+    // Default auction strategy requested by the user.
+    // Indexed as [slot][range] for GK, CB, CM1, CM2, ST.
+    private static final int[][] DEFAULT_MIN = {
+            {92,90,88,86}, // GK
+            {92,90,88,84}, // CB
+            {92,90,88,85}, // CM1
+            {90,88,86,50}, // CM2
+            {92,89,86,84}  // ST
+    };
+
+    private static final int[][] DEFAULT_MAX = {
+            {99,91,89,87}, // GK
+            {99,91,89,87}, // CB
+            {99,91,89,87}, // CM1
+            {99,89,87,50}, // CM2
+            {99,91,88,85}  // ST
+    };
+
+    private static final int[][] DEFAULT_BID = {
+            {45,35,25,20}, // GK
+            {50,42,30,20}, // CB
+            {55,45,35,25}, // CM1
+            {55,45,35,25}, // CM2
+            {65,45,30,10}  // ST
+    };
+
     private Prefs() {}
 
     private static SharedPreferences sp(Context c) {
@@ -24,20 +50,17 @@ public final class Prefs {
 
     public static int getRangeMin(Context c, int slot, int range) {
         slot = clamp(slot,0,4); range = clamp(range,0,RANGE_COUNT-1);
-        int[] d = {90,88,86,50};
-        return sp(c).getInt("rmin_"+slot+"_"+range, d[range]);
+        return sp(c).getInt("rmin_"+slot+"_"+range, DEFAULT_MIN[slot][range]);
     }
 
     public static int getRangeMax(Context c, int slot, int range) {
         slot = clamp(slot,0,4); range = clamp(range,0,RANGE_COUNT-1);
-        int[] d = {99,89,87,50};
-        return sp(c).getInt("rmax_"+slot+"_"+range, d[range]);
+        return sp(c).getInt("rmax_"+slot+"_"+range, DEFAULT_MAX[slot][range]);
     }
 
     public static int getMaxBid(Context c, int slot, int range) {
         slot = clamp(slot,0,4); range = clamp(range,0,RANGE_COUNT-1);
-        int[] d = {20,15,10,0};
-        return sp(c).getInt("bid_"+slot+"_"+range, d[range]);
+        return sp(c).getInt("bid_"+slot+"_"+range, DEFAULT_BID[slot][range]);
     }
 
     public static void setRange(Context c, int slot, int range, int min, int max, int bid) {
