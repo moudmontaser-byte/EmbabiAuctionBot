@@ -467,8 +467,13 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if(screenshotBusy) return;
         final boolean openingRound=isOpeningRound(all);
         final boolean skipEnabled=isSkipEnabled(root);
-        screenshotBusy=true;
 
+        // v33: read the rating first with the SAME Accessibility tree technique
+        // already used to understand the rest of the game screen.
+        final RectF exact=Prefs.getRegion(AuctionAccessibilityService.this,"card");
+        final Integer accessibilityRating=extractRatingFromAccessibility(root,exact);
+
+        screenshotBusy=true;
         takeScreenshot(android.view.Display.DEFAULT_DISPLAY,getMainExecutor(),new TakeScreenshotCallback(){
             @Override public void onSuccess(ScreenshotResult result) {
                 Bitmap b=Bitmap.wrapHardwareBuffer(result.getHardwareBuffer(),result.getColorSpace());
@@ -476,28 +481,30 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 if(b==null){ screenshotBusy=false; status("Screenshot فشل — بدون ضغط"); return; }
 
                 Bitmap copy=b.copy(Bitmap.Config.ARGB_8888,false);
-                // Keep the user's combined Rating+Position box as the main ROI.
-                // Only a small tolerance is added so card artwork doesn't flood the OCR.
-                RectF exact=Prefs.getRegion(AuctionAccessibilityService.this,"card");
-                RectF cardRegion=exact;
 
                 recognizer.process(InputImage.fromBitmap(copy,0))
                         .addOnSuccessListener(tx->{
+                            // Same whole-screen OCR used by the screen reader, then filter by
+                            // the tiny calibrated rating rectangle. This is only fallback when
+                            // Accessibility does not expose the number.
                             String seed=textInRegion(tx,exact,copy.getWidth(),copy.getHeight());
                             String mt=textInRegion(tx,Prefs.getRegion(AuctionAccessibilityService.this,"price"),
                                     copy.getWidth(),copy.getHeight());
                             Integer price=extractMoney(mt);
 
-                            Bitmap cardCrop=cropRegion(copy,cardRegion);
+                            Bitmap ratingCrop=cropRegion(copy,exact);
                             copy.recycle();
 
-                            readCardRobust(cardCrop,seed,card->{
+                            readCardRobust(ratingCrop,seed,card->{
                                 screenshotBusy=false;
-                                Integer rating=card==null?null:card.rating;
+
+                                Integer rating=accessibilityRating!=null
+                                        ? accessibilityRating
+                                        : (card==null?null:card.rating);
+
                                 int posRound=(guiRound!=null && guiRound>=1 && guiRound<=5)?guiRound:round;
                                 String pos=(posRound>=1 && posRound<=5)
                                         ? Prefs.EXPECTED_POSITIONS[posRound-1] : null;
-                                boolean posInferred=true;
 
                                 lastRating=rating==null?-1:rating;
                                 lastPosition=pos==null?"—":pos;
@@ -521,7 +528,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
                                 if(stable==null) {
                                     status("أثبت القراءة… "+pos+" OVR "+rating+" • "+price+
-                                            "M — تحقق شكل الرقم + قراءة ثانية");
+                                            "M — أحتاج نفس القراءة مرتين");
                                     return;
                                 }
 
@@ -533,7 +540,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                             copy.recycle();
                             screenshotBusy=false;
                             resetCardConsensus();
-                            status("OCR فشل — بدون ضغط، سأعيد المحاولة");
+                            status("قراءة الشاشة فشلت — بدون ضغط، سأعيد المحاولة");
                         });
             }
 
@@ -978,6 +985,69 @@ public class AuctionAccessibilityService extends AccessibilityService {
         for(int i=0;i<n.getChildCount();i++) collectMatching(n.getChild(i),out,targets);
     }
 
+    private Integer extractRatingFromAccessibility(AccessibilityNodeInfo root,RectF region) {
+        if(root==null || region==null) return null;
+        int sw=getResources().getDisplayMetrics().widthPixels;
+        int sh=getResources().getDisplayMetrics().heightPixels;
+        Rect roi=new Rect(
+                Math.round(region.left*sw),
+                Math.round(region.top*sh),
+                Math.round(region.right*sw),
+                Math.round(region.bottom*sh));
+        RatingNodeCandidate best=new RatingNodeCandidate();
+        findRatingNode(root,roi,best,0);
+        return best.rating;
+    }
+
+    private static final class RatingNodeCandidate {
+        Integer rating=null;
+        float score=-999f;
+    }
+
+    private void findRatingNode(AccessibilityNodeInfo n,Rect roi,RatingNodeCandidate best,int depth) {
+        if(n==null || depth>45) return;
+
+        Rect nr=new Rect();
+        n.getBoundsInScreen(nr);
+
+        if(!nr.isEmpty() && Rect.intersects(nr,roi)) {
+            StringBuilder raw=new StringBuilder();
+            CharSequence t=n.getText(),d=n.getContentDescription();
+            if(t!=null) raw.append(t).append(' ');
+            if(d!=null) raw.append(d);
+
+            Integer rating=extractRatingStrict(raw.toString());
+            if(rating!=null) {
+                float cx=nr.exactCenterX(), cy=nr.exactCenterY();
+                float rx=roi.exactCenterX(), ry=roi.exactCenterY();
+
+                float dx=(cx-rx)/Math.max(1f,roi.width());
+                float dy=(cy-ry)/Math.max(1f,roi.height());
+                float score=10f-(float)Math.sqrt(dx*dx+dy*dy);
+
+                if(roi.contains(Math.round(cx),Math.round(cy))) score+=5f;
+                if(nr.contains(Math.round(rx),Math.round(ry))) score+=2f;
+
+                float area=(float)Math.max(1,nr.width()*nr.height());
+                float roiArea=(float)Math.max(1,roi.width()*roi.height());
+                if(area>roiArea*8f) score-=6f;
+
+                String s=raw.toString().trim();
+                if(s.length()<=8) score+=3f;
+
+                if(score>best.score) {
+                    best.score=score;
+                    best.rating=rating;
+                }
+            }
+        }
+
+        for(int i=0;i<n.getChildCount();i++) {
+            AccessibilityNodeInfo child=n.getChild(i);
+            if(child!=null) findRatingNode(child,roi,best,depth+1);
+        }
+    }
+
     private String collectText(AccessibilityNodeInfo n) {
         StringBuilder b=new StringBuilder();
         collectTextRec(n,b,0);
@@ -1214,37 +1284,62 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void readCardRobust(Bitmap crop,String seed,CardReadResult cb) {
+        // v33 fallback is intentionally simple: use the same ML Kit reader on the
+        // original rating image, without gold masks, B/W thresholds or shape guesses.
+        Integer seedRating=extractRatingStrict(seed);
+        if(seedRating!=null) {
+            if(crop!=null) crop.recycle();
+            CardRead out=new CardRead();
+            out.rating=seedRating;
+            out.position=null;
+            out.raw="screen-ocr";
+            cb.done(out);
+            return;
+        }
+
         if(crop==null) {
             CardRead out=new CardRead();
-            out.rating=extractRatingStrict(seed);
+            out.rating=null;
             out.position=null;
-            out.raw=seed==null?"":seed;
+            out.raw="";
             cb.done(out);
             return;
         }
 
-        // v32 primary reader: shape recognition, not OCR.
-        // HOG features are based on edges/geometry, so white, light-gold and dark-gold
-        // versions of the same number are treated as the same shape.
-        DigitShapeClassifier.RatingResult shape=DigitShapeClassifier.predictRating(crop);
-        if(shape!=null) {
-            CardRead out=new CardRead();
-            out.rating=shape.rating;
-            out.position=null;
-            out.raw="shape:"+shape.rating+" conf="+shape.confidence;
+        Bitmap scaled;
+        try {
+            scaled=Bitmap.createScaledBitmap(crop,
+                    Math.max(1,crop.getWidth()*4),
+                    Math.max(1,crop.getHeight()*4),true);
+        } catch(Exception e) {
             crop.recycle();
+            CardRead out=new CardRead();
+            out.rating=null;
+            out.position=null;
+            out.raw="";
             cb.done(out);
             return;
         }
+        crop.recycle();
 
-        // Conservative fallback only if the shape model is unsure.
-        readRatingSimple(crop,seed,rating->{
-            CardRead out=new CardRead();
-            out.rating=rating;
-            out.position=null;
-            out.raw="ocr-fallback";
-            cb.done(out);
-        });
+        recognizer.process(InputImage.fromBitmap(scaled,0))
+                .addOnSuccessListener(tx->{
+                    Integer rating=extractRatingStrict(tx.getText());
+                    scaled.recycle();
+                    CardRead out=new CardRead();
+                    out.rating=rating;
+                    out.position=null;
+                    out.raw="crop-ocr";
+                    cb.done(out);
+                })
+                .addOnFailureListener(e->{
+                    scaled.recycle();
+                    CardRead out=new CardRead();
+                    out.rating=null;
+                    out.position=null;
+                    out.raw="";
+                    cb.done(out);
+                });
     }
 
     private Bitmap cropRelative(Bitmap src,float l,float t,float r,float b) {
@@ -1527,7 +1622,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if(digits.length()==2) {
             try {
                 int v=Integer.parseInt(digits);
-                if(v>=50 && v<=99) return v;
+                if(v>=70 && v<=99) return v;
             } catch(Exception ignored) {}
         }
 
