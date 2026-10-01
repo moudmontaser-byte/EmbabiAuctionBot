@@ -10,8 +10,8 @@ android {
         applicationId "com.embabi.auctionflex"
         minSdk 30
         targetSdk 35
-        versionCode 300
-        versionName "30.0-default-strategy"
+        versionCode 310
+        versionName "31.0-bw-rating-reader"
     }
 
     compileOptions {
