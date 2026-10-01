@@ -144,7 +144,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private void startBot() {
         if(!Prefs.isCalibrated(this)) {
             running=false; paused=false;
-            status("اعمل CAL 6/6 أولاً");
+            status("اعمل CAL 5/5 أولاً");
             showOverlay();
             return;
         }
@@ -155,6 +155,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
         running=true; paused=false; targetPackage=null;
         round=1; matches=0; stopAfterReturn=false; postFlow=false; postStage=0;
+        skipWhenAllowed=false; skipWhenAllowedRound=0;
         pending=Pending.NONE; pendingRetries=0; actionBusy=false;
         skipWhenAllowed=false; skipWhenAllowedRound=0;
         startedAt=System.currentTimeMillis();
@@ -265,23 +266,34 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void handleAuction(AccessibilityNodeInfo root,String all,Integer guiRound) {
-        // A previously-decided SKIP must survive the forced opening round.
+        // A SKIP decision survives the opening round. The starter cannot skip.
         if(skipWhenAllowed) {
             if(guiRound!=null && guiRound!=skipWhenAllowedRound) {
                 skipWhenAllowed=false;
                 skipWhenAllowedRound=0;
+                clearPending();
             } else {
-                boolean opening=isOpeningRound(all);
+                if(pending==Pending.CONFIRM &&
+                        containsAny(all,"انتظار المزايدة","انتظار المزايده","waiting bid","waiting for bid")) {
+                    clearPending();
+                }
+
                 boolean skipEnabled=isSkipEnabled(root);
-                if(!opening && skipEnabled && isOurTurn(root,all)) {
-                    status("Skip أصبح متاحًا ✓ — أنفذ قرار التخطي السابق");
+                boolean ourTurn=isOurTurn(root,all);
+
+                // As soon as Skip is really enabled on our turn, execute the saved decision.
+                // Do not rely only on the blue opening-message text because it may linger.
+                if(skipEnabled && ourTurn) {
+                    status("Skip أصبح متاحًا ✓ — أنفذ قرار التخطي المحفوظ");
                     skipWhenAllowed=false;
                     skipWhenAllowedRound=0;
                     doSkip();
+                } else if(pending==Pending.CONFIRM) {
+                    status("دفعت 1M الافتتاحية فقط ✓ — أنتظر الخصم ثم Skip");
+                } else if(!ourTurn) {
+                    status("قرار SKIP محفوظ — دور الخصم، أنتظر دورنا");
                 } else {
-                    status(opening
-                            ? "لاعب جديد • الدور الافتتاحي: Skip مقفول — أنتظر المزايدة التلقائية 1M"
-                            : "قرار SKIP محفوظ — أنتظر دورنا وفتح زر التخطي");
+                    status("قرار SKIP محفوظ — زر Skip ما زال مقفولًا، لن أضغطه");
                 }
                 return;
             }
@@ -359,31 +371,54 @@ public class AuctionAccessibilityService extends AccessibilityService {
         final boolean openingRound=isOpeningRound(all);
         final boolean skipEnabled=isSkipEnabled(root);
         screenshotBusy=true;
+
         takeScreenshot(android.view.Display.DEFAULT_DISPLAY,getMainExecutor(),new TakeScreenshotCallback(){
             @Override public void onSuccess(ScreenshotResult result) {
                 Bitmap b=Bitmap.wrapHardwareBuffer(result.getHardwareBuffer(),result.getColorSpace());
                 result.getHardwareBuffer().close();
                 if(b==null){ screenshotBusy=false; status("Screenshot فشل — بدون ضغط"); return; }
+
                 Bitmap copy=b.copy(Bitmap.Config.ARGB_8888,false);
+                RectF cardRegion=expandRegion(Prefs.getRegion(AuctionAccessibilityService.this,"card"),.16f,.12f);
+
                 recognizer.process(InputImage.fromBitmap(copy,0))
                         .addOnSuccessListener(tx->{
-                            String rt=textInRegion(tx,Prefs.getRegion(AuctionAccessibilityService.this,"rating"),copy.getWidth(),copy.getHeight());
-                            String pt=textInRegion(tx,Prefs.getRegion(AuctionAccessibilityService.this,"position"),copy.getWidth(),copy.getHeight());
-                            String mt=textInRegion(tx,Prefs.getRegion(AuctionAccessibilityService.this,"price"),copy.getWidth(),copy.getHeight());
-                            copy.recycle(); screenshotBusy=false;
-                            Integer rating=extractRating(rt);
+                            String seed=textInRegion(tx,cardRegion,copy.getWidth(),copy.getHeight());
+                            String mt=textInRegion(tx,Prefs.getRegion(AuctionAccessibilityService.this,"price"),
+                                    copy.getWidth(),copy.getHeight());
                             Integer price=extractMoney(mt);
-                            String pos=extractPosition(pt);
-                            if(rating==null || price==null || pos==null) {
-                                status("قراءة غير مؤكدة: OVR "+show(rating)+" | "+(pos==null?"?":pos)+" | "+show(price)+"M — لا أضغط");
-                                return;
-                            }
-                            verifyPositionAndDecide(rating,pos,price,guiRound,openingRound,skipEnabled);
+
+                            Bitmap cardCrop=cropRegion(copy,cardRegion);
+                            copy.recycle();
+
+                            readCardRobust(cardCrop,seed,card->{
+                                screenshotBusy=false;
+                                Integer rating=card==null?null:card.rating;
+                                String pos=card==null?null:card.position;
+
+                                if(rating==null || price==null || pos==null) {
+                                    status("قراءة الكارت غير مؤكدة: OVR "+show(rating)+
+                                            " | "+(pos==null?"?":pos)+" | "+show(price)+
+                                            "M — أعيد القراءة ولا أضغط");
+                                    return;
+                                }
+
+                                verifyPositionAndDecide(rating,pos,price,guiRound,openingRound,skipEnabled);
+                            });
                         })
-                        .addOnFailureListener(e->{ copy.recycle(); screenshotBusy=false; status("OCR فشل — بدون ضغط"); });
+                        .addOnFailureListener(e->{
+                            Bitmap cardCrop=cropRegion(copy,cardRegion);
+                            copy.recycle();
+                            readCardRobust(cardCrop,"",card->{
+                                screenshotBusy=false;
+                                status("OCR الشاشة فشل — سأعيد القراءة، بدون ضغط");
+                            });
+                        });
             }
+
             @Override public void onFailure(int errorCode) {
-                screenshotBusy=false; status("تعذر Screenshot ("+errorCode+")");
+                screenshotBusy=false;
+                status("تعذر Screenshot ("+errorCode+")");
             }
         });
     }
@@ -391,52 +426,45 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private void verifyPositionAndDecide(int rating,String pos,int price,Integer guiRound,
                                          boolean openingRound, boolean skipEnabled) {
         if(guiRound!=null && guiRound>=1 && guiRound<=5 && guiRound!=round) {
-            round=guiRound; Prefs.setCurrentRound(this,round);
+            round=guiRound;
+            Prefs.setCurrentRound(this,round);
         }
 
         String expected=Prefs.EXPECTED_POSITIONS[round-1];
         if(!expected.equals(pos)) {
             int unique=uniqueSlotForPosition(pos);
             if(guiRound==null && unique>round) {
-                round=unique; Prefs.setCurrentRound(this,round);
+                round=unique;
+                Prefs.setCurrentRound(this,round);
                 expected=Prefs.EXPECTED_POSITIONS[round-1];
             }
         }
 
+        // Position is a safety confirmation, not an assumption.
         if(!expected.equals(pos)) {
-            status("حماية الترتيب: متوقع "+expected+" في R"+round+" لكن قرأت "+pos+" — أنتظر ولا أضغط");
+            status("حماية الترتيب: متوقع "+expected+" في R"+round+
+                    " لكن قرأت "+pos+" — لا أضغط وأعيد القراءة");
             return;
         }
 
-        lastRating=rating; lastPosition=pos; lastPrice=price;
+        lastRating=rating;
+        lastPosition=pos;
+        lastPrice=price;
+
         int slot=round-1;
         int maxBid=Prefs.maxBidForRating(this,slot,rating);
         lastMax=maxBid;
         refreshOverlay();
 
         if(maxBid<=0) {
-            if(openingRound || !skipEnabled) {
-                skipWhenAllowed=true;
-                skipWhenAllowedRound=round;
-                status("R"+round+" "+pos+" OVR "+rating+
-                        " خارج الـ3 Ranges • Skip مقفول في الدور الافتتاحي — أنتظر 1M التلقائية ثم أتخطى");
-            } else {
-                status("R"+round+" "+pos+" OVR "+rating+" خارج الـ3 Ranges → SKIP");
-                doSkip();
-            }
+            requestSkipRespectingOpening(price,openingRound,skipEnabled,
+                    "R"+round+" "+pos+" OVR "+rating+" خارج الـ3 Ranges");
             return;
         }
 
         if(price>maxBid) {
-            if(openingRound || !skipEnabled) {
-                skipWhenAllowed=true;
-                skipWhenAllowedRound=round;
-                status("السعر "+price+"M أعلى من Max "+maxBid+
-                        "M لكن Skip غير متاح الآن — أحفظ قرار التخطي وأنتظر");
-            } else {
-                status("السعر "+price+"M أعلى من Max "+maxBid+"M → SKIP");
-                doSkip();
-            }
+            requestSkipRespectingOpening(price,openingRound,skipEnabled,
+                    "السعر "+price+"M أعلى من Max "+maxBid+"M");
             return;
         }
 
@@ -449,8 +477,50 @@ public class AuctionAccessibilityService extends AccessibilityService {
         int step=Prefs.bidStep(maxBid);
         int target=Math.min(maxBid,price+step);
         int clicks=Math.max(0,target-price);
-        status("R"+round+" "+pos+" OVR "+rating+" • "+price+"→"+target+"M • +"+clicks+" ثم Confirm");
+
+        status("R"+round+" "+pos+" OVR "+rating+
+                " • "+price+"→"+target+"M • +"+clicks+" ثم Confirm");
         doBidClicks(clicks,target);
+    }
+
+    private void requestSkipRespectingOpening(int price, boolean openingRound,
+                                                  boolean skipEnabled, String why) {
+        // If the opponent started this player, Skip becomes available when our turn arrives.
+        // If WE started, Skip is disabled: submit the minimum 1M only, then skip next turn.
+        if(skipEnabled) {
+            status(why+" → SKIP");
+            doSkip();
+            return;
+        }
+
+        skipWhenAllowed=true;
+        skipWhenAllowedRound=round;
+
+        if(openingRound && price<=1) {
+            status(why+" • أنت تبدأ اللاعب: أدفع 1M فقط ثم Skip في دورنا التالي");
+            submitOpeningMinimumForSkip();
+        } else {
+            status(why+" • Skip مقفول الآن — أحفظ القرار وأنتظر فتحه");
+        }
+    }
+
+    private void submitOpeningMinimumForSkip() {
+        if(actionBusy) return;
+        actionBusy=true;
+
+        // Important: no PLUS here. Current opening bid is already 1M.
+        tapSaved("confirm",ok->{
+            actionBusy=false;
+            if(ok) {
+                pending=Pending.CONFIRM;
+                pendingRound=round;
+                pendingRetries=0;
+                pendingAt=System.currentTimeMillis();
+                status("تم دفع 1M الافتتاحية فقط ✓ — لا مزايدة إضافية، Skip محفوظ");
+            } else {
+                status("فشل Confirm للـ1M — لن أضغط +، سأعيد التحقق من الشاشة");
+            }
+        });
     }
 
     private int uniqueSlotForPosition(String p) {
@@ -759,10 +829,167 @@ public class AuctionAccessibilityService extends AccessibilityService {
         return b.toString();
     }
 
+    private static class CardRead {
+        Integer rating;
+        String position;
+        String raw;
+    }
+
+    private interface CardReadResult {
+        void done(CardRead result);
+    }
+
+    private RectF expandRegion(RectF n,float padX,float padY) {
+        if(n==null) return null;
+        float w=n.width(), h=n.height();
+        return new RectF(
+                Math.max(0f,n.left-w*padX),
+                Math.max(0f,n.top-h*padY),
+                Math.min(1f,n.right+w*padX),
+                Math.min(1f,n.bottom+h*padY)
+        );
+    }
+
+    private Bitmap cropRegion(Bitmap base,RectF n) {
+        if(base==null || n==null) return null;
+        try {
+            int l=Math.max(0,Math.min(base.getWidth()-1,Math.round(n.left*base.getWidth())));
+            int t=Math.max(0,Math.min(base.getHeight()-1,Math.round(n.top*base.getHeight())));
+            int r=Math.max(l+1,Math.min(base.getWidth(),Math.round(n.right*base.getWidth())));
+            int b=Math.max(t+1,Math.min(base.getHeight(),Math.round(n.bottom*base.getHeight())));
+            return Bitmap.createBitmap(base,l,t,r-l,b-t);
+        } catch(Exception e) {
+            return null;
+        }
+    }
+
+    private void readCardRobust(Bitmap crop,String seed,CardReadResult cb) {
+        StringBuilder raw=new StringBuilder(seed==null?"":seed);
+        if(crop==null) {
+            cb.done(parseCard(raw.toString()));
+            return;
+        }
+
+        Bitmap scaled;
+        try {
+            int scale=4;
+            scaled=Bitmap.createScaledBitmap(crop,
+                    Math.max(1,crop.getWidth()*scale),
+                    Math.max(1,crop.getHeight()*scale),true);
+        } catch(Exception e) {
+            crop.recycle();
+            cb.done(parseCard(raw.toString()));
+            return;
+        }
+        crop.recycle();
+
+        ArrayList<Bitmap> variants=new ArrayList<>();
+        variants.add(scaled);
+
+        Bitmap bw=binaryOcrVariant(scaled,false);
+        Bitmap inv=binaryOcrVariant(scaled,true);
+        if(bw!=null) variants.add(bw);
+        if(inv!=null) variants.add(inv);
+
+        recognizeCardVariant(variants,0,raw,cb);
+    }
+
+    private void recognizeCardVariant(ArrayList<Bitmap> variants,int index,
+                                      StringBuilder raw,CardReadResult cb) {
+        if(index>=variants.size()) {
+            cb.done(parseCard(raw.toString()));
+            return;
+        }
+
+        Bitmap img=variants.get(index);
+        recognizer.process(InputImage.fromBitmap(img,0))
+                .addOnSuccessListener(tx->{
+                    raw.append(' ').append(tx.getText());
+                    img.recycle();
+
+                    CardRead ready=parseCard(raw.toString());
+                    if(ready.rating!=null && ready.position!=null) {
+                        recycleVariants(variants,index+1);
+                        cb.done(ready);
+                    } else {
+                        recognizeCardVariant(variants,index+1,raw,cb);
+                    }
+                })
+                .addOnFailureListener(e->{
+                    img.recycle();
+                    recognizeCardVariant(variants,index+1,raw,cb);
+                });
+    }
+
+    private void recycleVariants(ArrayList<Bitmap> variants,int from) {
+        for(int i=from;i<variants.size();i++) {
+            try {
+                Bitmap b=variants.get(i);
+                if(b!=null && !b.isRecycled()) b.recycle();
+            } catch(Exception ignored) {}
+        }
+    }
+
+    private Bitmap binaryOcrVariant(Bitmap src,boolean inverse) {
+        if(src==null) return null;
+        try {
+            int w=src.getWidth(), h=src.getHeight();
+            int[] px=new int[w*h];
+            src.getPixels(px,0,w,0,0,w,h);
+
+            long sum=0;
+            for(int color:px) {
+                int y=(Color.red(color)*299+Color.green(color)*587+Color.blue(color)*114)/1000;
+                sum+=y;
+            }
+
+            int avg=px.length==0?135:(int)(sum/px.length);
+            int threshold=Math.max(72,Math.min(205,avg));
+
+            for(int i=0;i<px.length;i++) {
+                int color=px[i];
+                int y=(Color.red(color)*299+Color.green(color)*587+Color.blue(color)*114)/1000;
+                boolean light=y>=threshold;
+                if(inverse) light=!light;
+                px[i]=light?Color.WHITE:Color.BLACK;
+            }
+
+            Bitmap out=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888);
+            out.setPixels(px,0,w,0,0,w,h);
+            return out;
+        } catch(Exception e) {
+            return null;
+        }
+    }
+
+    private CardRead parseCard(String raw) {
+        CardRead out=new CardRead();
+        out.raw=raw==null?"":raw;
+        out.rating=extractRating(out.raw);
+        out.position=extractPosition(out.raw);
+        return out;
+    }
+
     private Integer extractRating(String raw) {
         String s=cleanDigits(raw);
+
         Matcher m=Pattern.compile("(?<!\\d)([5-9]\\d)(?!\\d)").matcher(s);
-        while(m.find())try{int v=Integer.parseInt(m.group(1));if(v>=50&&v<=99)return v;}catch(Exception ignored){}
+        while(m.find()) {
+            try {
+                int v=Integer.parseInt(m.group(1));
+                if(v>=50 && v<=99) return v;
+            } catch(Exception ignored) {}
+        }
+
+        // Some shiny/gold cards make OCR split 89 into "8 9" or separate lines.
+        // Because this crop contains only rating+position, joining digit fragments is safe.
+        String compact=s.replaceAll("[^0-9]","");
+        for(int i=0;i+1<compact.length();i++) {
+            try {
+                int v=Integer.parseInt(compact.substring(i,i+2));
+                if(v>=50 && v<=99) return v;
+            } catch(Exception ignored) {}
+        }
         return null;
     }
 
@@ -774,12 +1001,14 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private String extractPosition(String raw) {
-        if(raw==null)return null;
-        String s=raw.toUpperCase(Locale.US).replace(" ","").replace("\n","");
-        if(s.contains("GK")||s.contains("6K"))return "GK";
-        if(s.contains("CB"))return "CB";
-        if(s.contains("CM"))return "CM";
-        if(s.contains("ST"))return "ST";
+        if(raw==null) return null;
+        String s=raw.toUpperCase(Locale.US)
+                .replaceAll("[^A-Z0-9]","");
+
+        if(s.contains("GK") || s.contains("6K")) return "GK";
+        if(s.contains("CB") || s.contains("C8")) return "CB";
+        if(s.contains("CM")) return "CM";
+        if(s.contains("ST") || s.contains("5T")) return "ST";
         return null;
     }
 
@@ -911,17 +1140,26 @@ public class AuctionAccessibilityService extends AccessibilityService {
         Intent i=new Intent(BotActions.STATUS);i.setPackage(getPackageName());i.putExtra(BotActions.EXTRA_STATUS,s);sendBroadcast(i);
     }
 
-    // ---------- Calibration 6/6 ----------
+    // ---------- Calibration 5/5 ----------
 
     private void startCalibration() {
-        running=false;paused=false;clearPending();actionBusy=false;
-        removeOverlay();removeCalibration();Prefs.clearCalibration(this);
-        calibrationStep=0;showCalibrationStep();
+        running=false;
+        paused=false;
+        clearPending();
+        actionBusy=false;
+        skipWhenAllowed=false;
+        skipWhenAllowedRound=0;
+        removeOverlay();
+        removeCalibration();
+        Prefs.clearCalibration(this);
+        calibrationStep=0;
+        showCalibrationStep();
     }
 
     private void showCalibrationStep() {
         removeCalibration();
         if(wm==null)wm=(WindowManager)getSystemService(WINDOW_SERVICE);
+
         FrameLayout frame=new FrameLayout(this);
         calibrationView=new CalibrationView(this);
         frame.addView(calibrationView,new FrameLayout.LayoutParams(-1,-1));
@@ -932,21 +1170,35 @@ public class AuctionAccessibilityService extends AccessibilityService {
         calibrationInstruction.setBackgroundColor(Color.argb(230,5,14,27));
         frame.addView(calibrationInstruction,new FrameLayout.LayoutParams(-1,dp(74),Gravity.TOP));
 
-        LinearLayout bottom=new LinearLayout(this);bottom.setPadding(dp(8),dp(8),dp(8),dp(8));
+        LinearLayout bottom=new LinearLayout(this);
+        bottom.setPadding(dp(8),dp(8),dp(8),dp(8));
         bottom.setBackgroundColor(Color.argb(230,5,14,27));
+
         Button cancel=ovButton("إلغاء",Color.rgb(88,35,48));
-        Button save=ovButton(calibrationStep<3?"حفظ / التالي ✓":"المس المكان على الشاشة",Color.rgb(31,149,255));
-        bottom.addView(cancel,new LinearLayout.LayoutParams(0,dp(50),1));gap(bottom);
+        Button save=ovButton(calibrationStep<2?"حفظ / التالي ✓":"المس المكان على الشاشة",Color.rgb(31,149,255));
+
+        bottom.addView(cancel,new LinearLayout.LayoutParams(0,dp(50),1));
+        gap(bottom);
         bottom.addView(save,new LinearLayout.LayoutParams(0,dp(50),2));
         frame.addView(bottom,new FrameLayout.LayoutParams(-1,dp(68),Gravity.BOTTOM));
 
-        cancel.setOnClickListener(v->{removeCalibration();showOverlay();status("تم إلغاء CAL");});
+        cancel.setOnClickListener(v->{
+            removeCalibration();
+            showOverlay();
+            status("تم إلغاء CAL");
+        });
+
         save.setOnClickListener(v->{
-            if(calibrationStep>=3)return;
+            if(calibrationStep>=2) return;
             RectF r=calibrationView.selection();
-            if(r==null||r.width()<.012f||r.height()<.010f){Toast.makeText(this,"ارسم مربع واضح حول المطلوب",Toast.LENGTH_SHORT).show();return;}
-            String key=new String[]{"rating","position","price"}[calibrationStep];
-            Prefs.saveRegion(this,key,r);calibrationStep++;showCalibrationStep();
+            if(r==null || r.width()<.015f || r.height()<.018f) {
+                Toast.makeText(this,"ارسم مربع واضح حول المطلوب",Toast.LENGTH_SHORT).show();
+                return;
+            }
+            String key=new String[]{"card","price"}[calibrationStep];
+            Prefs.saveRegion(this,key,r);
+            calibrationStep++;
+            showCalibrationStep();
         });
 
         calibrationRoot=frame;
@@ -955,30 +1207,44 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN|WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT);
         lp.gravity=Gravity.TOP|Gravity.START;
-        try{wm.addView(frame,lp);}catch(Exception e){calibrationRoot=null;showOverlay();status("تعذر فتح CAL");}
+
+        try {
+            wm.addView(frame,lp);
+        } catch(Exception e) {
+            calibrationRoot=null;
+            showOverlay();
+            status("تعذر فتح CAL");
+        }
     }
 
     private String calibrationLabel() {
         switch(calibrationStep) {
-            case 0:return "1/6 — ارسم مربع صغير حول رقم تقييم اللاعب فقط (مثلاً 87)";
-            case 1:return "2/6 — ارسم مربع حول المركز فقط (GK / CB / CM / ST)";
-            case 2:return "3/6 — ارسم مربع حول قيمة المزايدة الحالية فقط";
-            case 3:return "4/6 — المس منتصف زر +";
-            case 4:return "5/6 — المس منتصف زر «تأكيد المزايدة»";
-            default:return "6/6 — المس منتصف زر «تخطي اللاعب»";
+            case 0:return "1/5 — ارسم مربع واحد حول التقييم والمركز معًا (مثلاً 89 وفوق/تحتها CM)";
+            case 1:return "2/5 — ارسم مربع حول قيمة المزايدة الحالية فقط";
+            case 2:return "3/5 — المس منتصف زر +";
+            case 3:return "4/5 — المس منتصف زر «تأكيد المزايدة»";
+            default:return "5/5 — المس منتصف زر «تخطي اللاعب»";
         }
     }
 
     private void onCalibrationTap(float x,float y) {
-        if(calibrationStep<3||calibrationStep>5)return;
-        int w=getResources().getDisplayMetrics().widthPixels,hg=getResources().getDisplayMetrics().heightPixels;
-        String key=calibrationStep==3?"plus":calibrationStep==4?"confirm":"skip";
+        if(calibrationStep<2 || calibrationStep>4) return;
+
+        int w=getResources().getDisplayMetrics().widthPixels;
+        int hg=getResources().getDisplayMetrics().heightPixels;
+        String key=calibrationStep==2?"plus":calibrationStep==3?"confirm":"skip";
+
         Prefs.saveTapPointPx(this,key,x,y,w,hg);
         calibrationStep++;
-        if(calibrationStep>5) {
-            Prefs.markCalibrated(this);removeCalibration();showOverlay();
-            status(Prefs.isCalibrated(this)?"CAL 6/6 READY ✓":"CAL غير مكتمل");
-        } else showCalibrationStep();
+
+        if(calibrationStep>4) {
+            Prefs.markCalibrated(this);
+            removeCalibration();
+            showOverlay();
+            status(Prefs.isCalibrated(this)?"CAL 5/5 READY ✓":"CAL غير مكتمل");
+        } else {
+            showCalibrationStep();
+        }
     }
 
     private void removeCalibration() {
@@ -990,34 +1256,67 @@ public class AuctionAccessibilityService extends AccessibilityService {
         private final Paint border=new Paint(3),shade=new Paint(3),label=new Paint(3);
         private final RectF sel=new RectF();
         private float sx,sy;
+
         CalibrationView(Context c){
-            super(c);border.setStyle(Paint.Style.STROKE);border.setStrokeWidth(dp(3));border.setColor(Color.rgb(40,195,255));
-            shade.setColor(Color.argb(70,0,0,0));label.setColor(Color.WHITE);label.setTextSize(dp(14));label.setTypeface(Typeface.DEFAULT_BOLD);
+            super(c);
+            border.setStyle(Paint.Style.STROKE);
+            border.setStrokeWidth(dp(3));
+            border.setColor(Color.rgb(40,195,255));
+            shade.setColor(Color.argb(70,0,0,0));
+            label.setColor(Color.WHITE);
+            label.setTextSize(dp(14));
+            label.setTypeface(Typeface.DEFAULT_BOLD);
         }
+
         @Override protected void onDraw(Canvas c){
             super.onDraw(c);
-            if(calibrationStep<3 && !sel.isEmpty()){
-                c.drawRect(0,0,getWidth(),sel.top,shade);c.drawRect(0,sel.bottom,getWidth(),getHeight(),shade);
-                c.drawRect(0,sel.top,sel.left,sel.bottom,shade);c.drawRect(sel.right,sel.top,getWidth(),sel.bottom,shade);
-                c.drawRoundRect(sel,dp(8),dp(8),border);c.drawText("OCR",sel.left+dp(5),Math.max(dp(92),sel.top-dp(5)),label);
-            } else if(calibrationStep>=3) {
-                c.drawText(calibrationStep==3?"TAP +":calibrationStep==4?"TAP CONFIRM":"TAP SKIP",dp(18),dp(105),label);
+
+            if(calibrationStep<2 && !sel.isEmpty()){
+                c.drawRect(0,0,getWidth(),sel.top,shade);
+                c.drawRect(0,sel.bottom,getWidth(),getHeight(),shade);
+                c.drawRect(0,sel.top,sel.left,sel.bottom,shade);
+                c.drawRect(sel.right,sel.top,getWidth(),sel.bottom,shade);
+                c.drawRoundRect(sel,dp(8),dp(8),border);
+                c.drawText(calibrationStep==0?"OVR + POS":"PRICE",
+                        sel.left+dp(5),Math.max(dp(92),sel.top-dp(5)),label);
+            } else if(calibrationStep>=2) {
+                String tap=calibrationStep==2?"TAP +":
+                        calibrationStep==3?"TAP CONFIRM":"TAP SKIP";
+                c.drawText(tap,dp(18),dp(105),label);
             }
         }
+
         @Override public boolean onTouchEvent(MotionEvent e){
             float x=Math.max(0,Math.min(getWidth(),e.getX()));
             float y=Math.max(dp(78),Math.min(getHeight()-dp(72),e.getY()));
-            if(calibrationStep>=3){
-                if(e.getAction()==MotionEvent.ACTION_DOWN){float rx=e.getRawX(),ry=e.getRawY();h.post(()->onCalibrationTap(rx,ry));}
+
+            if(calibrationStep>=2){
+                if(e.getAction()==MotionEvent.ACTION_DOWN){
+                    float rx=e.getRawX(), ry=e.getRawY();
+                    h.post(()->onCalibrationTap(rx,ry));
+                }
                 return true;
             }
-            if(e.getAction()==MotionEvent.ACTION_DOWN){sx=x;sy=y;sel.set(x,y,x+1,y+1);invalidate();return true;}
-            if(e.getAction()==MotionEvent.ACTION_MOVE){sel.set(Math.min(sx,x),Math.min(sy,y),Math.max(sx,x),Math.max(sy,y));invalidate();return true;}
+
+            if(e.getAction()==MotionEvent.ACTION_DOWN){
+                sx=x; sy=y;
+                sel.set(x,y,x+1,y+1);
+                invalidate();
+                return true;
+            }
+
+            if(e.getAction()==MotionEvent.ACTION_MOVE){
+                sel.set(Math.min(sx,x),Math.min(sy,y),Math.max(sx,x),Math.max(sy,y));
+                invalidate();
+                return true;
+            }
             return true;
         }
+
         RectF selection(){
-            if(getWidth()<=0||getHeight()<=0||sel.isEmpty())return null;
-            return new RectF(sel.left/getWidth(),sel.top/getHeight(),sel.right/getWidth(),sel.bottom/getHeight());
+            if(getWidth()<=0 || getHeight()<=0 || sel.isEmpty()) return null;
+            return new RectF(sel.left/getWidth(),sel.top/getHeight(),
+                    sel.right/getWidth(),sel.bottom/getHeight());
         }
     }
 
