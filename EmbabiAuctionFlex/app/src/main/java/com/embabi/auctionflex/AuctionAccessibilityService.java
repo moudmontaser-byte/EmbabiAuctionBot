@@ -1566,27 +1566,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         return null;
     }
 
-    private Integer extractRatingStrict(String raw) {
-        if(raw==null) return null;
-        String s=toWestern(raw.toUpperCase(Locale.US));
-        Matcher m=Pattern.compile("(?<!\\d)([5-9]\\d)(?!\\d)").matcher(s);
-        while(m.find()) {
-            try {
-                int v=Integer.parseInt(m.group(1));
-                if(v>=50 && v<=99) return v;
-            } catch(Exception ignored) {}
-        }
-
-        // ML can split "91" into "9 1" on shiny cards.
-        String digits=s.replaceAll("[^0-9]","");
-        if(digits.length()==2) {
-            try {
-                int v=Integer.parseInt(digits);
-                if(v>=50 && v<=99) return v;
-            } catch(Exception ignored) {}
-        }
-        return null;
-    }
+    
 
     private Integer extractRatingFuzzy(String raw) {
         if(raw==null) return null;
