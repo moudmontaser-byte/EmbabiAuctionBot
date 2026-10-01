@@ -53,7 +53,7 @@ public final class Prefs {
     }
 
     public static int maxBidForRating(Context c, int slot, int rating) {
-        for (int r=0;r<3;r++) {
+        for (int r=0;r<RANGE_COUNT;r++) {
             if (rating >= getRangeMin(c,slot,r) && rating <= getRangeMax(c,slot,r)) {
                 return getMaxBid(c,slot,r);
             }
@@ -62,7 +62,7 @@ public final class Prefs {
     }
 
     public static int rangeIndexForRating(Context c, int slot, int rating) {
-        for (int r=0;r<3;r++) {
+        for (int r=0;r<RANGE_COUNT;r++) {
             if (rating >= getRangeMin(c,slot,r) && rating <= getRangeMax(c,slot,r)) return r;
         }
         return -1;
