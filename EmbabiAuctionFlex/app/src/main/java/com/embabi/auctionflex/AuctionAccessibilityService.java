@@ -379,7 +379,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 if(b==null){ screenshotBusy=false; status("Screenshot فشل — بدون ضغط"); return; }
 
                 Bitmap copy=b.copy(Bitmap.Config.ARGB_8888,false);
-                RectF cardRegion=expandRegion(Prefs.getRegion(AuctionAccessibilityService.this,"card"),.16f,.12f);
+                RectF cardRegion=expandRegion(Prefs.getRegion(AuctionAccessibilityService.this,"card"),.20f,.16f);
 
                 recognizer.process(InputImage.fromBitmap(copy,0))
                         .addOnSuccessListener(tx->{
@@ -396,6 +396,16 @@ public class AuctionAccessibilityService extends AccessibilityService {
                                 Integer rating=card==null?null:card.rating;
                                 String pos=card==null?null:card.position;
 
+                                // Never leave the yellow overlay showing the PREVIOUS player
+                                // while the current read is incomplete.
+                                lastRating=rating==null?-1:rating;
+                                lastPosition=pos==null?"—":pos;
+                                lastPrice=price==null?-1:price;
+                                lastMax=(rating!=null && round>=1 && round<=5)
+                                        ? Prefs.maxBidForRating(AuctionAccessibilityService.this,round-1,rating)
+                                        : -1;
+                                refreshOverlay();
+
                                 if(rating==null || price==null || pos==null) {
                                     status("قراءة الكارت غير مؤكدة: OVR "+show(rating)+
                                             " | "+(pos==null?"?":pos)+" | "+show(price)+
@@ -411,6 +421,13 @@ public class AuctionAccessibilityService extends AccessibilityService {
                             copy.recycle();
                             readCardRobust(cardCrop,"",card->{
                                 screenshotBusy=false;
+                                Integer rating=card==null?null:card.rating;
+                                String pos=card==null?null:card.position;
+                                lastRating=rating==null?-1:rating;
+                                lastPosition=pos==null?"—":pos;
+                                lastPrice=-1;
+                                lastMax=-1;
+                                refreshOverlay();
                                 status("OCR الشاشة فشل — سأعيد القراءة، بدون ضغط");
                             });
                         });
@@ -857,6 +874,57 @@ public class AuctionAccessibilityService extends AccessibilityService {
         return b.toString();
     }
 
+    private Bitmap thresholdOcrVariant(Bitmap src,int threshold,boolean inverse) {
+        if(src==null) return null;
+        try {
+            int w=src.getWidth(), h=src.getHeight();
+            int[] px=new int[w*h];
+            src.getPixels(px,0,w,0,0,w,h);
+
+            for(int i=0;i<px.length;i++) {
+                int color=px[i];
+                int y=(Color.red(color)*299+Color.green(color)*587+Color.blue(color)*114)/1000;
+                boolean light=y>=threshold;
+                if(inverse) light=!light;
+                px[i]=light?Color.WHITE:Color.BLACK;
+            }
+
+            Bitmap out=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888);
+            out.setPixels(px,0,w,0,0,w,h);
+            return out;
+        } catch(Exception e) {
+            return null;
+        }
+    }
+
+    private Bitmap saturationOcrVariant(Bitmap src) {
+        if(src==null) return null;
+        try {
+            int w=src.getWidth(), h=src.getHeight();
+            int[] px=new int[w*h];
+            src.getPixels(px,0,w,0,0,w,h);
+
+            for(int i=0;i<px.length;i++) {
+                int color=px[i];
+                int r=Color.red(color), g=Color.green(color), b=Color.blue(color);
+                int max=Math.max(r,Math.max(g,b));
+                int min=Math.min(r,Math.min(g,b));
+                int sat=max-min;
+                int lum=(r*299+g*587+b*114)/1000;
+
+                // Gold card letters have strong chroma plus a dark outline.
+                boolean ink=(sat>45 && lum<225) || lum<92;
+                px[i]=ink?Color.BLACK:Color.WHITE;
+            }
+
+            Bitmap out=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888);
+            out.setPixels(px,0,w,0,0,w,h);
+            return out;
+        } catch(Exception e) {
+            return null;
+        }
+    }
+
     private static class CardRead {
         Integer rating;
         String position;
@@ -900,7 +968,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         Bitmap scaled;
         try {
-            int scale=4;
+            int scale=5;
             scaled=Bitmap.createScaledBitmap(crop,
                     Math.max(1,crop.getWidth()*scale),
                     Math.max(1,crop.getHeight()*scale),true);
@@ -916,8 +984,15 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
         Bitmap bw=binaryOcrVariant(scaled,false);
         Bitmap inv=binaryOcrVariant(scaled,true);
+        Bitmap dark=thresholdOcrVariant(scaled,118,false);
+        Bitmap mid=thresholdOcrVariant(scaled,158,false);
+        Bitmap sat=saturationOcrVariant(scaled);
+
         if(bw!=null) variants.add(bw);
         if(inv!=null) variants.add(inv);
+        if(dark!=null) variants.add(dark);
+        if(mid!=null) variants.add(mid);
+        if(sat!=null) variants.add(sat);
 
         recognizeCardVariant(variants,0,raw,cb);
     }
@@ -999,7 +1074,19 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private Integer extractRating(String raw) {
-        String s=cleanDigits(raw);
+        if(raw==null) return null;
+
+        String base=raw.toUpperCase(Locale.US);
+        String s=toWestern(base)
+                .replace('O','0')
+                .replace('Q','0')
+                .replace('D','0')
+                .replace('I','1')
+                .replace('L','1')
+                .replace('Z','2')
+                .replace('S','5')
+                .replace('G','6')
+                .replace('B','8');
 
         Matcher m=Pattern.compile("(?<!\\d)([5-9]\\d)(?!\\d)").matcher(s);
         while(m.find()) {
@@ -1009,8 +1096,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
             } catch(Exception ignored) {}
         }
 
-        // Some shiny/gold cards make OCR split 89 into "8 9" or separate lines.
-        // Because this crop contains only rating+position, joining digit fragments is safe.
+        // Stylized gold digits are often returned as BG/B6/8G or with spaces.
+        // In this calibrated ROI, joining short digit-like fragments is safe.
         String compact=s.replaceAll("[^0-9]","");
         for(int i=0;i+1<compact.length();i++) {
             try {
@@ -1018,6 +1105,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 if(v>=50 && v<=99) return v;
             } catch(Exception ignored) {}
         }
+
         return null;
     }
 
