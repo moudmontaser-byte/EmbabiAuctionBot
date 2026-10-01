@@ -10,8 +10,8 @@ android {
         applicationId "com.embabi.auctionflex"
         minSdk 30
         targetSdk 35
-        versionCode 230
-        versionName "23.0-gold-card-ocr"
+        versionCode 240
+        versionName "24.0-stability-engine"
     }
 
     compileOptions {
