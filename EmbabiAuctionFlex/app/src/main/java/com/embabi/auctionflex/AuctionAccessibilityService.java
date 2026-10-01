@@ -496,6 +496,16 @@ public class AuctionAccessibilityService extends AccessibilityService {
                                 Integer rating=card==null?null:card.rating;
                                 String pos=card==null?null:card.position;
 
+                                // Position is secondary safety. If OCR misses ST/CB/CM/GK but
+                                // the game's own 1/5..5/5 indicator is readable, infer the
+                                // fixed expected position. If OCR returns a CONTRADICTING
+                                // position we still stop.
+                                boolean posInferred=false;
+                                if(pos==null && guiRound!=null && guiRound>=1 && guiRound<=5) {
+                                    pos=Prefs.EXPECTED_POSITIONS[guiRound-1];
+                                    posInferred=true;
+                                }
+
                                 lastRating=rating==null?-1:rating;
                                 lastPosition=pos==null?"—":pos;
                                 lastPrice=price==null?-1:price;
@@ -512,12 +522,24 @@ public class AuctionAccessibilityService extends AccessibilityService {
                                     return;
                                 }
 
+                                if(guiRound!=null && guiRound>=1 && guiRound<=5) {
+                                    String expected=Prefs.EXPECTED_POSITIONS[guiRound-1];
+                                    if(!expected.equals(pos)) {
+                                        resetCardConsensus();
+                                        status("رفض قراءة متعارضة: "+pos+" لكن "+guiRound+
+                                                "/5 متوقع "+expected+" — لا أضغط");
+                                        return;
+                                    }
+                                }
+
                                 int effectiveRound=(guiRound!=null && guiRound>=1 && guiRound<=5)
                                         ? guiRound : round;
                                 CardRead stable=addConsensusSample(rating,pos,price,effectiveRound);
 
                                 if(stable==null) {
-                                    status("أثبت القراءة… "+pos+" OVR "+rating+" • "+price+"M (أحتاج تطابق قراءتين)");
+                                    status("أثبت القراءة… "+pos+" OVR "+rating+" • "+price+"M"+
+                                            (posInferred?" (المركز من "+guiRound+"/5)":"")+
+                                            " — أحتاج تطابق قراءتين");
                                     return;
                                 }
 
@@ -1108,6 +1130,72 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
     }
 
+    private static class RatingVotes {
+        final int[] counts=new int[100];
+        final ArrayList<String> traces=new ArrayList<>();
+
+        void add(Integer v,String raw) {
+            if(v==null || v<50 || v>99) return;
+            counts[v]++;
+            traces.add(v+":"+sanitizeTrace(raw));
+        }
+
+        Integer winner() {
+            int best=-1,bestVotes=0,second=0;
+            for(int v=50;v<=99;v++) {
+                int n=counts[v];
+                if(n>bestVotes) {
+                    second=bestVotes;
+                    bestVotes=n;
+                    best=v;
+                } else if(n>second) {
+                    second=n;
+                }
+            }
+            if(bestVotes==0) return null;
+            if(bestVotes>=2 && bestVotes>second) return best;
+            if(bestVotes==1 && second==0) return best; // temporal consensus still required later
+            return null; // conflicting OCR variants: do not guess
+        }
+
+        int winnerVotes() {
+            int m=0;
+            for(int v=50;v<=99;v++) m=Math.max(m,counts[v]);
+            return m;
+        }
+    }
+
+    private static class PositionVotes {
+        int gk=0,cb=0,cm=0,st=0;
+
+        void add(String p) {
+            if("GK".equals(p)) gk++;
+            else if("CB".equals(p)) cb++;
+            else if("CM".equals(p)) cm++;
+            else if("ST".equals(p)) st++;
+        }
+
+        String winner() {
+            int[] n={gk,cb,cm,st};
+            String[] p={"GK","CB","CM","ST"};
+            int best=-1,bv=0,second=0;
+            for(int i=0;i<n.length;i++) {
+                if(n[i]>bv) { second=bv; bv=n[i]; best=i; }
+                else if(n[i]>second) second=n[i];
+            }
+            if(best<0 || bv==0) return null;
+            if(bv>=2 && bv>second) return p[best];
+            if(bv==1 && second==0) return p[best];
+            return null;
+        }
+    }
+
+    private static String sanitizeTrace(String s) {
+        if(s==null) return "";
+        s=s.replace('\n',' ').replace('\r',' ').trim();
+        return s.length()>18?s.substring(0,18):s;
+    }
+
     private static class CardRead {
         Integer rating;
         String position;
@@ -1144,9 +1232,13 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void readCardRobust(Bitmap crop,String seed,CardReadResult cb) {
-        StringBuilder raw=new StringBuilder(seed==null?"":seed);
         if(crop==null) {
-            cb.done(parseCard(raw.toString()));
+            CardRead out=new CardRead();
+            out.rating=extractRatingStrict(seed);
+            if(out.rating==null) out.rating=extractRatingFuzzy(seed);
+            out.position=extractPosition(seed);
+            out.raw=seed==null?"":seed;
+            cb.done(out);
             return;
         }
 
@@ -1158,53 +1250,127 @@ public class AuctionAccessibilityService extends AccessibilityService {
                     Math.max(1,crop.getHeight()*scale),true);
         } catch(Exception e) {
             crop.recycle();
-            cb.done(parseCard(raw.toString()));
+            cb.done(parseCard(seed));
             return;
         }
         crop.recycle();
 
-        ArrayList<Bitmap> variants=new ArrayList<>();
-        variants.add(scaled);
+        // User still calibrates ONE rectangle. Internally split it:
+        // upper area = rating, lower area = position, with overlap for different card skins.
+        Bitmap ratingCrop=cropRelative(scaled,0f,0f,1f,.68f);
+        Bitmap posCrop=cropRelative(scaled,0f,.43f,1f,1f);
+        scaled.recycle();
 
-        Bitmap bw=binaryOcrVariant(scaled,false);
-        Bitmap inv=binaryOcrVariant(scaled,true);
-        Bitmap dark=thresholdOcrVariant(scaled,118,false);
-        Bitmap mid=thresholdOcrVariant(scaled,158,false);
-        Bitmap sat=saturationOcrVariant(scaled);
+        RatingVotes rv=new RatingVotes();
+        PositionVotes pv=new PositionVotes();
 
-        if(bw!=null) variants.add(bw);
-        if(inv!=null) variants.add(inv);
-        if(dark!=null) variants.add(dark);
-        if(mid!=null) variants.add(mid);
-        if(sat!=null) variants.add(sat);
+        // Seed from the exact calibrated box gets only one vote.
+        Integer seedRating=extractRatingStrict(seed);
+        if(seedRating==null) seedRating=extractRatingFuzzy(seed);
+        rv.add(seedRating,seed);
+        pv.add(extractPosition(seed));
 
-        recognizeCardVariant(variants,0,raw,cb);
+        ArrayList<Bitmap> ratingVariants=buildRatingVariants(ratingCrop);
+        ArrayList<Bitmap> positionVariants=buildPositionVariants(posCrop);
+
+        recognizeRatingVariants(ratingVariants,0,rv,()->{
+            recognizePositionVariants(positionVariants,0,pv,()->{
+                CardRead out=new CardRead();
+                out.rating=rv.winner();
+                out.position=pv.winner();
+                out.raw="ratingVotes="+rv.winnerVotes();
+                cb.done(out);
+            });
+        });
     }
 
-    private void recognizeCardVariant(ArrayList<Bitmap> variants,int index,
-                                      StringBuilder raw,CardReadResult cb) {
+    private Bitmap cropRelative(Bitmap src,float l,float t,float r,float b) {
+        if(src==null) return null;
+        try {
+            int x1=Math.max(0,Math.min(src.getWidth()-1,Math.round(l*src.getWidth())));
+            int y1=Math.max(0,Math.min(src.getHeight()-1,Math.round(t*src.getHeight())));
+            int x2=Math.max(x1+1,Math.min(src.getWidth(),Math.round(r*src.getWidth())));
+            int y2=Math.max(y1+1,Math.min(src.getHeight(),Math.round(b*src.getHeight())));
+            return Bitmap.createBitmap(src,x1,y1,x2-x1,y2-y1);
+        } catch(Exception e) {
+            return null;
+        }
+    }
+
+    private ArrayList<Bitmap> buildRatingVariants(Bitmap src) {
+        ArrayList<Bitmap> v=new ArrayList<>();
+        if(src==null) return v;
+        v.add(src);
+        Bitmap a=thresholdOcrVariant(src,105,false);
+        Bitmap b=thresholdOcrVariant(src,135,false);
+        Bitmap d=thresholdOcrVariant(src,170,false);
+        Bitmap e=binaryOcrVariant(src,false);
+        Bitmap f=binaryOcrVariant(src,true);
+        Bitmap g=saturationOcrVariant(src);
+        if(a!=null)v.add(a);
+        if(b!=null)v.add(b);
+        if(d!=null)v.add(d);
+        if(e!=null)v.add(e);
+        if(f!=null)v.add(f);
+        if(g!=null)v.add(g);
+        return v;
+    }
+
+    private ArrayList<Bitmap> buildPositionVariants(Bitmap src) {
+        ArrayList<Bitmap> v=new ArrayList<>();
+        if(src==null) return v;
+        v.add(src);
+        Bitmap a=thresholdOcrVariant(src,120,false);
+        Bitmap b=thresholdOcrVariant(src,160,false);
+        Bitmap d=binaryOcrVariant(src,false);
+        Bitmap e=saturationOcrVariant(src);
+        if(a!=null)v.add(a);
+        if(b!=null)v.add(b);
+        if(d!=null)v.add(d);
+        if(e!=null)v.add(e);
+        return v;
+    }
+
+    private void recognizeRatingVariants(ArrayList<Bitmap> variants,int index,
+                                         RatingVotes votes,Runnable done) {
         if(index>=variants.size()) {
-            cb.done(parseCard(raw.toString()));
+            done.run();
             return;
         }
 
         Bitmap img=variants.get(index);
         recognizer.process(InputImage.fromBitmap(img,0))
                 .addOnSuccessListener(tx->{
-                    raw.append(' ').append(tx.getText());
+                    String raw=tx.getText();
+                    Integer rating=extractRatingStrict(raw);
+                    if(rating==null) rating=extractRatingFuzzy(raw);
+                    votes.add(rating,raw);
                     img.recycle();
-
-                    CardRead ready=parseCard(raw.toString());
-                    if(ready.rating!=null && ready.position!=null) {
-                        recycleVariants(variants,index+1);
-                        cb.done(ready);
-                    } else {
-                        recognizeCardVariant(variants,index+1,raw,cb);
-                    }
+                    recognizeRatingVariants(variants,index+1,votes,done);
                 })
                 .addOnFailureListener(e->{
                     img.recycle();
-                    recognizeCardVariant(variants,index+1,raw,cb);
+                    recognizeRatingVariants(variants,index+1,votes,done);
+                });
+    }
+
+    private void recognizePositionVariants(ArrayList<Bitmap> variants,int index,
+                                           PositionVotes votes,Runnable done) {
+        if(index>=variants.size()) {
+            done.run();
+            return;
+        }
+
+        Bitmap img=variants.get(index);
+        recognizer.process(InputImage.fromBitmap(img,0))
+                .addOnSuccessListener(tx->{
+                    votes.add(extractPosition(tx.getText()));
+                    img.recycle();
+                    recognizePositionVariants(variants,index+1,votes,done);
+                })
+                .addOnFailureListener(e->{
+                    img.recycle();
+                    recognizePositionVariants(variants,index+1,votes,done);
                 });
     }
 
@@ -1252,16 +1418,44 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private CardRead parseCard(String raw) {
         CardRead out=new CardRead();
         out.raw=raw==null?"":raw;
-        out.rating=extractRating(out.raw);
+        out.rating=extractRatingStrict(out.raw);
+        if(out.rating==null) out.rating=extractRatingFuzzy(out.raw);
         out.position=extractPosition(out.raw);
         return out;
     }
 
     private Integer extractRating(String raw) {
+        Integer v=extractRatingStrict(raw);
+        return v!=null?v:extractRatingFuzzy(raw);
+    }
+
+    private Integer extractRatingStrict(String raw) {
+        if(raw==null) return null;
+        String s=toWestern(raw.toUpperCase(Locale.US));
+        Matcher m=Pattern.compile("(?<!\\d)([5-9]\\d)(?!\\d)").matcher(s);
+        while(m.find()) {
+            try {
+                int v=Integer.parseInt(m.group(1));
+                if(v>=50 && v<=99) return v;
+            } catch(Exception ignored) {}
+        }
+
+        // ML can split "91" into "9 1" on shiny cards.
+        String digits=s.replaceAll("[^0-9]","");
+        if(digits.length()==2) {
+            try {
+                int v=Integer.parseInt(digits);
+                if(v>=50 && v<=99) return v;
+            } catch(Exception ignored) {}
+        }
+        return null;
+    }
+
+    private Integer extractRatingFuzzy(String raw) {
         if(raw==null) return null;
 
-        String base=raw.toUpperCase(Locale.US);
-        String s=toWestern(base)
+        // Only used on the RATING-ONLY crop. Never transform arbitrary full-card text.
+        String s=toWestern(raw.toUpperCase(Locale.US))
                 .replace('O','0')
                 .replace('Q','0')
                 .replace('D','0')
@@ -1272,24 +1466,23 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 .replace('G','6')
                 .replace('B','8');
 
-        Matcher m=Pattern.compile("(?<!\\d)([5-9]\\d)(?!\\d)").matcher(s);
-        while(m.find()) {
+        String compact=s.replaceAll("[^0-9]","");
+        if(compact.length()<2) return null;
+
+        // Prefer exactly two digit-like glyphs. Longer strings often contain noise.
+        if(compact.length()==2) {
             try {
-                int v=Integer.parseInt(m.group(1));
+                int v=Integer.parseInt(compact);
                 if(v>=50 && v<=99) return v;
             } catch(Exception ignored) {}
         }
 
-        // Stylized gold digits are often returned as BG/B6/8G or with spaces.
-        // In this calibrated ROI, joining short digit-like fragments is safe.
-        String compact=s.replaceAll("[^0-9]","");
         for(int i=0;i+1<compact.length();i++) {
             try {
                 int v=Integer.parseInt(compact.substring(i,i+2));
                 if(v>=50 && v<=99) return v;
             } catch(Exception ignored) {}
         }
-
         return null;
     }
 
