@@ -10,8 +10,8 @@ android {
         applicationId "com.embabi.auctionflex"
         minSdk 30
         targetSdk 35
-        versionCode 240
-        versionName "24.0-stability-engine"
+        versionCode 250
+        versionName "25.0-specialized-card-reader"
     }
 
     compileOptions {
