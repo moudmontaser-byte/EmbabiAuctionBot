@@ -1233,12 +1233,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private void readCardRobust(Bitmap crop,String seed,CardReadResult cb) {
         if(crop==null) {
-            CardRead out=new CardRead();
-            out.rating=extractRatingStrict(seed);
-            if(out.rating==null) out.rating=extractRatingFuzzy(seed);
-            out.position=extractPosition(seed);
-            out.raw=seed==null?"":seed;
-            cb.done(out);
+            cb.done(parseCard(seed));
             return;
         }
 
@@ -1255,33 +1250,43 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
         crop.recycle();
 
-        // User still calibrates ONE rectangle. Internally split it:
-        // upper area = rating, lower area = position, with overlap for different card skins.
-        Bitmap ratingCrop=cropRelative(scaled,0f,0f,1f,.68f);
+        // Keep the v25 reader as the normal path because it works for most cards.
+        // Only add one special path for the bright white/gold card family that was
+        // repeatedly failing in the user's real screenshots.
+        Bitmap lightRatingCrop=cropRelative(scaled,.02f,0f,.82f,.58f);
+        Bitmap normalRatingCrop=cropRelative(scaled,0f,0f,1f,.68f);
         Bitmap posCrop=cropRelative(scaled,0f,.43f,1f,1f);
         scaled.recycle();
 
-        RatingVotes rv=new RatingVotes();
-        PositionVotes pv=new PositionVotes();
+        if(isBrightWhiteGoldCard(lightRatingCrop)) {
+            Bitmap outline=darkOutlineRatingMask(lightRatingCrop);
+            if(lightRatingCrop!=null && !lightRatingCrop.isRecycled()) lightRatingCrop.recycle();
 
-        // Seed from the exact calibrated box gets only one vote.
-        Integer seedRating=extractRatingStrict(seed);
-        if(seedRating==null) seedRating=extractRatingFuzzy(seed);
-        rv.add(seedRating,seed);
-        pv.add(extractPosition(seed));
+            if(outline!=null) {
+                recognizer.process(InputImage.fromBitmap(outline,0))
+                        .addOnSuccessListener(tx->{
+                            Integer outlineRating=extractRatingStrict(tx.getText());
+                            outline.recycle();
 
-        ArrayList<Bitmap> ratingVariants=buildRatingVariants(ratingCrop);
-        ArrayList<Bitmap> positionVariants=buildPositionVariants(posCrop);
+                            if(outlineRating!=null) {
+                                // Rating solved by the dark outline. Position still uses
+                                // the old v25 path because position reading already works.
+                                readPositionWithV25(posCrop,seed,outlineRating,cb);
+                            } else {
+                                runV25CardReader(normalRatingCrop,posCrop,seed,cb);
+                            }
+                        })
+                        .addOnFailureListener(e->{
+                            outline.recycle();
+                            runV25CardReader(normalRatingCrop,posCrop,seed,cb);
+                        });
+                return;
+            }
+        } else {
+            if(lightRatingCrop!=null && !lightRatingCrop.isRecycled()) lightRatingCrop.recycle();
+        }
 
-        recognizeRatingVariants(ratingVariants,0,rv,()->{
-            recognizePositionVariants(positionVariants,0,pv,()->{
-                CardRead out=new CardRead();
-                out.rating=rv.winner();
-                out.position=pv.winner();
-                out.raw="ratingVotes="+rv.winnerVotes();
-                cb.done(out);
-            });
-        });
+        runV25CardReader(normalRatingCrop,posCrop,seed,cb);
     }
 
     private Bitmap cropRelative(Bitmap src,float l,float t,float r,float b) {
@@ -1329,6 +1334,123 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if(d!=null)v.add(d);
         if(e!=null)v.add(e);
         return v;
+    }
+
+    private void runV25CardReader(Bitmap ratingCrop,Bitmap posCrop,
+                                       String seed,CardReadResult cb) {
+        RatingVotes rv=new RatingVotes();
+        PositionVotes pv=new PositionVotes();
+
+        Integer seedRating=extractRatingStrict(seed);
+        if(seedRating==null) seedRating=extractRatingFuzzy(seed);
+        rv.add(seedRating,seed);
+        pv.add(extractPosition(seed));
+
+        ArrayList<Bitmap> ratingVariants=buildRatingVariants(ratingCrop);
+        ArrayList<Bitmap> positionVariants=buildPositionVariants(posCrop);
+
+        recognizeRatingVariants(ratingVariants,0,rv,()->{
+            recognizePositionVariants(positionVariants,0,pv,()->{
+                CardRead out=new CardRead();
+                out.rating=rv.winner();
+                out.position=pv.winner();
+                out.raw="v25-fallback";
+                cb.done(out);
+            });
+        });
+    }
+
+    private void readPositionWithV25(Bitmap posCrop,String seed,
+                                     int rating,CardReadResult cb) {
+        PositionVotes pv=new PositionVotes();
+        pv.add(extractPosition(seed));
+        ArrayList<Bitmap> positionVariants=buildPositionVariants(posCrop);
+
+        recognizePositionVariants(positionVariants,0,pv,()->{
+            CardRead out=new CardRead();
+            out.rating=rating;
+            out.position=pv.winner();
+            out.raw="outline-rating";
+            cb.done(out);
+        });
+    }
+
+    private boolean isBrightWhiteGoldCard(Bitmap src) {
+        if(src==null) return false;
+        try {
+            int w=src.getWidth(), h=src.getHeight();
+            int step=Math.max(1,Math.min(w,h)/70);
+            long lumSum=0;
+            int count=0, bright=0;
+
+            for(int y=0;y<h;y+=step) {
+                for(int x=0;x<w;x+=step) {
+                    int color=src.getPixel(x,y);
+                    int lum=(Color.red(color)*299+
+                            Color.green(color)*587+
+                            Color.blue(color)*114)/1000;
+                    lumSum+=lum;
+                    count++;
+                    if(lum>=155) bright++;
+                }
+            }
+
+            if(count==0) return false;
+            float avg=lumSum/(float)count;
+            float brightRatio=bright/(float)count;
+
+            return avg>=128f && brightRatio>=0.38f;
+        } catch(Exception e) {
+            return false;
+        }
+    }
+
+    private Bitmap darkOutlineRatingMask(Bitmap src) {
+        if(src==null) return null;
+        try {
+            int w=src.getWidth(), h=src.getHeight();
+            int[] original=new int[w*h];
+            src.getPixels(original,0,w,0,0,w,h);
+
+            boolean[] dark=new boolean[original.length];
+            int darkCount=0;
+
+            // The rating glyph has a very dark brown/black outline on every
+            // failed white/gold card. That outline is much more stable than
+            // the gold fill, whose shade changes from card to card.
+            for(int i=0;i<original.length;i++) {
+                int color=original[i];
+                int lum=(Color.red(color)*299+
+                        Color.green(color)*587+
+                        Color.blue(color)*114)/1000;
+                dark[i]=lum<=102;
+                if(dark[i]) darkCount++;
+            }
+
+            if(darkCount < Math.max(20,original.length/180)) return null;
+
+            int[] out=new int[original.length];
+
+            // Slightly thicken the dark outline so ML Kit sees normal-looking
+            // digit strokes. This is one deterministic transform, not voting.
+            for(int y=0;y<h;y++) {
+                for(int x=0;x<w;x++) {
+                    boolean ink=false;
+                    for(int yy=Math.max(0,y-1);yy<=Math.min(h-1,y+1) && !ink;yy++) {
+                        for(int xx=Math.max(0,x-1);xx<=Math.min(w-1,x+1);xx++) {
+                            if(dark[yy*w+xx]) { ink=true; break; }
+                        }
+                    }
+                    out[y*w+x]=ink?Color.BLACK:Color.WHITE;
+                }
+            }
+
+            Bitmap mask=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888);
+            mask.setPixels(out,0,w,0,0,w,h);
+            return mask;
+        } catch(Exception e) {
+            return null;
+        }
     }
 
     private void recognizeRatingVariants(ArrayList<Bitmap> variants,int index,
