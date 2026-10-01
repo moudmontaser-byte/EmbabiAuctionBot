@@ -10,8 +10,8 @@ android {
         applicationId "com.embabi.auctionflex"
         minSdk 30
         targetSdk 35
-        versionCode 200
-        versionName "20.0-flex-ranges"
+        versionCode 201
+        versionName "20.1-opening-skip"
     }
 
     compileOptions {
