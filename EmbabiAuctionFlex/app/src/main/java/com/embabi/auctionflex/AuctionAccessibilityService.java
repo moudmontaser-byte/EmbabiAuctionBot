@@ -518,7 +518,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                                     resetCardConsensus();
                                     status("قراءة غير مؤكدة: OVR "+show(rating)+
                                             " | "+(pos==null?"?":pos)+" | "+show(price)+
-                                            "M — لا أضغط");
+                                            "M — أعيد القراءة، لا أضغط");
                                     return;
                                 }
 
@@ -1235,7 +1235,6 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if(crop==null) {
             CardRead out=new CardRead();
             out.rating=extractRatingStrict(seed);
-            if(out.rating==null) out.rating=extractRatingFuzzy(seed);
             out.position=extractPosition(seed);
             out.raw=seed==null?"":seed;
             cb.done(out);
@@ -1250,35 +1249,30 @@ public class AuctionAccessibilityService extends AccessibilityService {
                     Math.max(1,crop.getHeight()*scale),true);
         } catch(Exception e) {
             crop.recycle();
-            cb.done(parseCard(seed));
+            CardRead out=new CardRead();
+            out.rating=extractRatingStrict(seed);
+            out.position=extractPosition(seed);
+            out.raw=seed==null?"":seed;
+            cb.done(out);
             return;
         }
         crop.recycle();
 
-        // User still calibrates ONE rectangle. Internally split it:
-        // upper area = rating, lower area = position, with overlap for different card skins.
-        Bitmap ratingCrop=cropRelative(scaled,0f,0f,1f,.68f);
-        Bitmap posCrop=cropRelative(scaled,0f,.43f,1f,1f);
+        // One calibrated box, two simple internal zones:
+        // top = rating, bottom = position.
+        Bitmap ratingCrop=cropRelative(scaled,0f,0f,1f,.60f);
+        Bitmap positionCrop=cropRelative(scaled,0f,.42f,1f,1f);
         scaled.recycle();
 
-        RatingVotes rv=new RatingVotes();
-        PositionVotes pv=new PositionVotes();
-
-        // Seed from the exact calibrated box gets only one vote.
-        Integer seedRating=extractRatingStrict(seed);
-        if(seedRating==null) seedRating=extractRatingFuzzy(seed);
-        rv.add(seedRating,seed);
-        pv.add(extractPosition(seed));
-
-        ArrayList<Bitmap> ratingVariants=buildRatingVariants(ratingCrop);
-        ArrayList<Bitmap> positionVariants=buildPositionVariants(posCrop);
-
-        recognizeRatingVariants(ratingVariants,0,rv,()->{
-            recognizePositionVariants(positionVariants,0,pv,()->{
+        // Position is easy and already works well: read it once from the lower zone.
+        readPositionOnce(positionCrop,position->{
+            // Rating: first the clean original crop. If it fails, use ONE
+            // dedicated gold mask based on the real failed cards we studied.
+            readRatingOriginalThenGold(ratingCrop,rating->{
                 CardRead out=new CardRead();
-                out.rating=rv.winner();
-                out.position=pv.winner();
-                out.raw="ratingVotes="+rv.winnerVotes();
+                out.rating=rating;
+                out.position=position!=null?position:extractPosition(seed);
+                out.raw="simple-gold-reader";
                 cb.done(out);
             });
         });
@@ -1331,28 +1325,140 @@ public class AuctionAccessibilityService extends AccessibilityService {
         return v;
     }
 
-    private void recognizeRatingVariants(ArrayList<Bitmap> variants,int index,
-                                         RatingVotes votes,Runnable done) {
-        if(index>=variants.size()) {
-            done.run();
-            return;
-        }
-
-        Bitmap img=variants.get(index);
+    private void readPositionOnce(Bitmap img,SimpleStringResult cb) {
+        if(img==null) { cb.done(null); return; }
         recognizer.process(InputImage.fromBitmap(img,0))
                 .addOnSuccessListener(tx->{
-                    String raw=tx.getText();
-                    Integer rating=extractRatingStrict(raw);
-                    if(rating==null) rating=extractRatingFuzzy(raw);
-                    votes.add(rating,raw);
+                    String p=extractPosition(tx.getText());
                     img.recycle();
-                    recognizeRatingVariants(variants,index+1,votes,done);
+                    cb.done(p);
                 })
                 .addOnFailureListener(e->{
                     img.recycle();
-                    recognizeRatingVariants(variants,index+1,votes,done);
+                    cb.done(null);
                 });
     }
+
+    private void readRatingOriginalThenGold(Bitmap original,SimpleIntResult cb) {
+        if(original==null) { cb.done(null); return; }
+
+        recognizer.process(InputImage.fromBitmap(original,0))
+                .addOnSuccessListener(tx->{
+                    Integer strict=extractRatingStrict(tx.getText());
+                    if(strict!=null) {
+                        original.recycle();
+                        cb.done(strict);
+                        return;
+                    }
+
+                    Bitmap gold=goldRatingMask(original);
+                    original.recycle();
+                    if(gold==null) {
+                        cb.done(null);
+                        return;
+                    }
+
+                    recognizer.process(InputImage.fromBitmap(gold,0))
+                            .addOnSuccessListener(gtx->{
+                                Integer rating=extractRatingStrict(gtx.getText());
+                                gold.recycle();
+                                cb.done(rating);
+                            })
+                            .addOnFailureListener(e->{
+                                gold.recycle();
+                                cb.done(null);
+                            });
+                })
+                .addOnFailureListener(e->{
+                    Bitmap gold=goldRatingMask(original);
+                    original.recycle();
+                    if(gold==null) { cb.done(null); return; }
+
+                    recognizer.process(InputImage.fromBitmap(gold,0))
+                            .addOnSuccessListener(gtx->{
+                                Integer rating=extractRatingStrict(gtx.getText());
+                                gold.recycle();
+                                cb.done(rating);
+                            })
+                            .addOnFailureListener(x->{
+                                gold.recycle();
+                                cb.done(null);
+                            });
+                });
+    }
+
+    private Bitmap goldRatingMask(Bitmap src) {
+        if(src==null) return null;
+        try {
+            int w=src.getWidth(), h=src.getHeight();
+            int[] px=new int[w*h];
+            src.getPixels(px,0,w,0,0,w,h);
+
+            boolean[] raw=new boolean[px.length];
+            int rawCount=0;
+
+            // Wide gold family taken from the failed white/gold cards:
+            // bronze -> yellow gold. We don't depend on one exact shade.
+            for(int i=0;i<px.length;i++) {
+                int color=px[i];
+                int r=Color.red(color), g=Color.green(color), b=Color.blue(color);
+
+                boolean gold =
+                        r>=115 &&
+                        g>=65 &&
+                        b<=165 &&
+                        (r-b)>=42 &&
+                        (g-b)>=18 &&
+                        r>=g-35;
+
+                raw[i]=gold;
+                if(gold) rawCount++;
+            }
+
+            if(rawCount < Math.max(20,px.length/150)) return null;
+
+            int[] out=new int[px.length];
+            int kept=0;
+
+            // Simple 3x3 density filter: thick rating strokes survive;
+            // thin marble veins / sparkles mostly disappear.
+            for(int y=0;y<h;y++) {
+                for(int x=0;x<w;x++) {
+                    int idx=y*w+x;
+                    if(!raw[idx]) {
+                        out[idx]=Color.WHITE;
+                        continue;
+                    }
+
+                    int neighbors=0;
+                    for(int yy=Math.max(0,y-1);yy<=Math.min(h-1,y+1);yy++) {
+                        for(int xx=Math.max(0,x-1);xx<=Math.min(w-1,x+1);xx++) {
+                            if(raw[yy*w+xx]) neighbors++;
+                        }
+                    }
+
+                    if(neighbors>=5) {
+                        out[idx]=Color.BLACK;
+                        kept++;
+                    } else {
+                        out[idx]=Color.WHITE;
+                    }
+                }
+            }
+
+            float ratio=kept/(float)Math.max(1,px.length);
+            if(ratio<0.010f || ratio>0.55f) return null;
+
+            Bitmap mask=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888);
+            mask.setPixels(out,0,w,0,0,w,h);
+            return mask;
+        } catch(Exception e) {
+            return null;
+        }
+    }
+
+    private interface SimpleIntResult { void done(Integer value); }
+    private interface SimpleStringResult { void done(String value); }
 
     private void recognizePositionVariants(ArrayList<Bitmap> variants,int index,
                                            PositionVotes votes,Runnable done) {
@@ -1419,14 +1525,36 @@ public class AuctionAccessibilityService extends AccessibilityService {
         CardRead out=new CardRead();
         out.raw=raw==null?"":raw;
         out.rating=extractRatingStrict(out.raw);
-        if(out.rating==null) out.rating=extractRatingFuzzy(out.raw);
         out.position=extractPosition(out.raw);
         return out;
     }
 
     private Integer extractRating(String raw) {
-        Integer v=extractRatingStrict(raw);
-        return v!=null?v:extractRatingFuzzy(raw);
+        return extractRatingStrict(raw);
+    }
+
+    private Integer extractRatingStrict(String raw) {
+        if(raw==null) return null;
+
+        String s=toWestern(raw.toUpperCase(Locale.US));
+        Matcher m=Pattern.compile("(?<!\\d)([5-9]\\d)(?!\\d)").matcher(s);
+        while(m.find()) {
+            try {
+                int v=Integer.parseInt(m.group(1));
+                if(v>=50 && v<=99) return v;
+            } catch(Exception ignored) {}
+        }
+
+        // Some OCR engines insert a space/newline between the two real digits.
+        // We only join when the crop contains exactly two numeric characters.
+        String digits=s.replaceAll("[^0-9]","");
+        if(digits.length()==2) {
+            try {
+                int v=Integer.parseInt(digits);
+                if(v>=50 && v<=99) return v;
+            } catch(Exception ignored) {}
+        }
+        return null;
     }
 
     private Integer extractRatingStrict(String raw) {
