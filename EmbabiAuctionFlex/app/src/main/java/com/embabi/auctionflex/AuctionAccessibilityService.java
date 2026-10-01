@@ -85,11 +85,21 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private TextView calibrationInstruction;
     private int calibrationStep=0;
 
+    // Quality / stability state. Decisions are made only after repeated agreement.
+    private boolean auctionActive=false;
+    private long lastProgressAt=System.currentTimeMillis();
+    private final int[] sampleRating={-1,-1,-1};
+    private final int[] samplePrice={-1,-1,-1};
+    private final int[] sampleRound={-1,-1,-1};
+    private final String[] samplePosition={"","",""};
+    private int sampleIndex=0, sampleCount=0;
+
+
     private final Runnable monitor=new Runnable() {
         @Override public void run() {
             Prefs.setHeartbeat(AuctionAccessibilityService.this,System.currentTimeMillis());
             if(running && !paused) analyze();
-            h.postDelayed(this,650);
+            h.postDelayed(this,currentPollDelay());
         }
     };
 
@@ -159,6 +169,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
         pending=Pending.NONE; pendingRetries=0; actionBusy=false;
         skipWhenAllowed=false; skipWhenAllowedRound=0;
         startedAt=System.currentTimeMillis();
+        lastProgressAt=startedAt;
+        auctionActive=false;
+        resetCardConsensus();
         Prefs.setCurrentRound(this,1); Prefs.setMatches(this,0); Prefs.setStartedAt(this,startedAt);
         status("RUN — افتح Embabi Games، سأتعرف على الشاشة تلقائياً");
         showOverlay();
@@ -177,6 +190,69 @@ public class AuctionAccessibilityService extends AccessibilityService {
         status(s);
     }
 
+
+    private long currentPollDelay() {
+        if(!running || paused) return 900;
+        if(actionBusy || screenshotBusy) return 180;
+        if(auctionActive) return 260;
+        if(postFlow && postStage==4) return 1050; // simulation: no need to burn CPU
+        if(postFlow) return 600;
+        return 700;
+    }
+
+    private void markProgress() {
+        lastProgressAt=System.currentTimeMillis();
+    }
+
+    private void resetCardConsensus() {
+        sampleIndex=0;
+        sampleCount=0;
+        for(int i=0;i<3;i++) {
+            sampleRating[i]=-1;
+            samplePrice[i]=-1;
+            sampleRound[i]=-1;
+            samplePosition[i]="";
+        }
+    }
+
+    private void resetVisiblePlayerRead() {
+        lastRating=-1;
+        lastPrice=-1;
+        lastMax=-1;
+        lastPosition="—";
+        resetCardConsensus();
+        refreshOverlay();
+    }
+
+    private CardRead addConsensusSample(int rating,String pos,int price,int sampleR) {
+        sampleRating[sampleIndex]=rating;
+        samplePrice[sampleIndex]=price;
+        sampleRound[sampleIndex]=sampleR;
+        samplePosition[sampleIndex]=pos==null?"":pos;
+        sampleIndex=(sampleIndex+1)%3;
+        if(sampleCount<3) sampleCount++;
+
+        for(int i=0;i<sampleCount;i++) {
+            int votes=0;
+            for(int j=0;j<sampleCount;j++) {
+                if(sampleRating[i]==sampleRating[j] &&
+                        samplePrice[i]==samplePrice[j] &&
+                        sampleRound[i]==sampleRound[j] &&
+                        samplePosition[i].equals(samplePosition[j])) {
+                    votes++;
+                }
+            }
+            if(votes>=2) {
+                CardRead out=new CardRead();
+                out.rating=sampleRating[i];
+                out.position=samplePosition[i];
+                out.price=samplePrice[i];
+                return out;
+            }
+        }
+        return null;
+    }
+
     private void analyze() {
         if(screenshotBusy||actionBusy||System.currentTimeMillis()<actionCooldownUntil) return;
         AccessibilityNodeInfo root=getRootInActiveWindow();
@@ -192,17 +268,29 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if(!pkg.equals(targetPackage)) { status("البوت شغال — ارجع للعبة"); return; }
 
         String all=normalize(collectText(root));
+        auctionActive=isAuctionScreen(all);
+
+        // Conservative watchdog: resync state without blind taps if a state is stale.
+        if(auctionActive && System.currentTimeMillis()-lastProgressAt>25_000L) {
+            clearPending();
+            resetCardConsensus();
+            lastProgressAt=System.currentTimeMillis();
+            status("إعادة مزامنة آمنة للمزاد — أقرأ الحالة من جديد بدون ضغط عشوائي");
+        }
         Integer guiRound=extractRound(all);
         if(guiRound!=null && guiRound>=1 && guiRound<=5) {
             if(guiRound!=round) {
-                round=guiRound; Prefs.setCurrentRound(this,round);
+                round=guiRound;
+                Prefs.setCurrentRound(this,round);
                 if(pending!=Pending.NONE && guiRound!=pendingRound) clearPending();
+                resetVisiblePlayerRead();
+                markProgress();
             }
         }
 
-        if(handlePostFlow(root,all)) return;
+        if(handlePostFlow(root,all)) { auctionActive=false; return; }
 
-        if(isAuctionScreen(all)) {
+        if(auctionActive) {
             handleAuction(root,all,guiRound);
             return;
         }
@@ -303,14 +391,23 @@ public class AuctionAccessibilityService extends AccessibilityService {
             if(guiRound!=null && guiRound!=pendingRound) { clearPending(); }
             else if(pending==Pending.CONFIRM && containsAny(all,"انتظار المزايدة","انتظار المزايده","waiting bid")) {
                 clearPending();
+                markProgress();
                 status("المزايدة اتأكدت ✓ — دور الخصم");
                 return;
             } else if(pending==Pending.SKIP) {
                 long age=System.currentTimeMillis()-pendingAt;
-                if(age>1500 && pendingRetries<3) {
-                    pendingRetries++; pendingAt=System.currentTimeMillis();
-                    status("Skip لم يغيّر اللاعب بعد — إعادة المحاولة "+pendingRetries+"/3");
-                    tapSaved("skip",ok->{ actionBusy=false; });
+                if(age>1300 && pendingRetries<3) {
+                    AccessibilityNodeInfo live=getRootInActiveWindow();
+                    String liveText=live==null?"":normalize(collectText(live));
+                    if(live!=null && !isOpeningRound(liveText) &&
+                            isSkipEnabled(live) && isOurTurn(live,liveText)) {
+                        pendingRetries++;
+                        pendingAt=System.currentTimeMillis();
+                        status("Skip لم يغيّر اللاعب — إعادة آمنة "+pendingRetries+"/3");
+                        tapSaved("skip",ok->{ if(ok) markProgress(); });
+                    } else {
+                        status("أتحقق من انتقال اللاعب — لن أعيد Skip وهو غير متاح");
+                    }
                 } else {
                     status("أنتظر انتقال اللاعب بعد Skip…");
                 }
@@ -379,11 +476,14 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 if(b==null){ screenshotBusy=false; status("Screenshot فشل — بدون ضغط"); return; }
 
                 Bitmap copy=b.copy(Bitmap.Config.ARGB_8888,false);
-                RectF cardRegion=expandRegion(Prefs.getRegion(AuctionAccessibilityService.this,"card"),.20f,.16f);
+                // Keep the user's combined Rating+Position box as the main ROI.
+                // Only a small tolerance is added so card artwork doesn't flood the OCR.
+                RectF exact=Prefs.getRegion(AuctionAccessibilityService.this,"card");
+                RectF cardRegion=expandRegion(exact,.08f,.08f);
 
                 recognizer.process(InputImage.fromBitmap(copy,0))
                         .addOnSuccessListener(tx->{
-                            String seed=textInRegion(tx,cardRegion,copy.getWidth(),copy.getHeight());
+                            String seed=textInRegion(tx,exact,copy.getWidth(),copy.getHeight());
                             String mt=textInRegion(tx,Prefs.getRegion(AuctionAccessibilityService.this,"price"),
                                     copy.getWidth(),copy.getHeight());
                             Integer price=extractMoney(mt);
@@ -396,8 +496,6 @@ public class AuctionAccessibilityService extends AccessibilityService {
                                 Integer rating=card==null?null:card.rating;
                                 String pos=card==null?null:card.position;
 
-                                // Never leave the yellow overlay showing the PREVIOUS player
-                                // while the current read is incomplete.
                                 lastRating=rating==null?-1:rating;
                                 lastPosition=pos==null?"—":pos;
                                 lastPrice=price==null?-1:price;
@@ -407,34 +505,37 @@ public class AuctionAccessibilityService extends AccessibilityService {
                                 refreshOverlay();
 
                                 if(rating==null || price==null || pos==null) {
-                                    status("قراءة الكارت غير مؤكدة: OVR "+show(rating)+
+                                    resetCardConsensus();
+                                    status("قراءة غير مؤكدة: OVR "+show(rating)+
                                             " | "+(pos==null?"?":pos)+" | "+show(price)+
-                                            "M — أعيد القراءة ولا أضغط");
+                                            "M — لا أضغط");
                                     return;
                                 }
 
-                                verifyPositionAndDecide(rating,pos,price,guiRound,openingRound,skipEnabled);
+                                int effectiveRound=(guiRound!=null && guiRound>=1 && guiRound<=5)
+                                        ? guiRound : round;
+                                CardRead stable=addConsensusSample(rating,pos,price,effectiveRound);
+
+                                if(stable==null) {
+                                    status("أثبت القراءة… "+pos+" OVR "+rating+" • "+price+"M (أحتاج تطابق قراءتين)");
+                                    return;
+                                }
+
+                                verifyPositionAndDecide(stable.rating,stable.position,stable.price,
+                                        guiRound,openingRound,skipEnabled);
                             });
                         })
                         .addOnFailureListener(e->{
-                            Bitmap cardCrop=cropRegion(copy,cardRegion);
                             copy.recycle();
-                            readCardRobust(cardCrop,"",card->{
-                                screenshotBusy=false;
-                                Integer rating=card==null?null:card.rating;
-                                String pos=card==null?null:card.position;
-                                lastRating=rating==null?-1:rating;
-                                lastPosition=pos==null?"—":pos;
-                                lastPrice=-1;
-                                lastMax=-1;
-                                refreshOverlay();
-                                status("OCR الشاشة فشل — سأعيد القراءة، بدون ضغط");
-                            });
+                            screenshotBusy=false;
+                            resetCardConsensus();
+                            status("OCR فشل — بدون ضغط، سأعيد المحاولة");
                         });
             }
 
             @Override public void onFailure(int errorCode) {
                 screenshotBusy=false;
+                resetCardConsensus();
                 status("تعذر Screenshot ("+errorCode+")");
             }
         });
@@ -442,6 +543,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private void verifyPositionAndDecide(int rating,String pos,int price,Integer guiRound,
                                          boolean openingRound, boolean skipEnabled) {
+        resetCardConsensus();
         if(guiRound!=null && guiRound>=1 && guiRound<=5 && guiRound!=round) {
             round=guiRound;
             Prefs.setCurrentRound(this,round);
@@ -562,10 +664,12 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
 
         actionBusy=true;
+        resetCardConsensus();
         tapSaved("skip",ok->{
             actionBusy=false;
             if(ok) {
                 pending=Pending.SKIP; pendingRound=round; pendingRetries=0; pendingAt=System.currentTimeMillis();
+                markProgress();
                 status("Skip اتضغط ✓ — أتحقق إن اللاعب اتغيّر");
             } else status("فشل ضغط Skip — سأحاول في القراءة التالية");
         });
@@ -574,24 +678,96 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private void doBidClicks(int clicks,int target) {
         if(actionBusy) return;
         actionBusy=true;
+        resetCardConsensus();
+
         tapPlusSequence(clicks,()->{
-            h.postDelayed(()->tapSaved("confirm",ok->{
-                actionBusy=false;
-                if(ok) {
-                    pending=Pending.CONFIRM; pendingRound=round; pendingRetries=0; pendingAt=System.currentTimeMillis();
-                    status("Confirm ✓ — Target "+target+"M، أنتظر الخصم");
-                } else status("فشل Confirm — لن أضيف + جديد تلقائياً");
-            }),260);
+            h.postDelayed(()->verifyBidPriceThenConfirm(target,0),260);
+        });
+    }
+
+    private void verifyBidPriceThenConfirm(int target,int attempt) {
+        if(attempt>3) {
+            actionBusy=false;
+            status("لم أقدر أتأكد من قيمة المزايدة بعد + — لم أضغط Confirm حفاظًا على القرار");
+            return;
+        }
+
+        screenshotBusy=true;
+        takeScreenshot(android.view.Display.DEFAULT_DISPLAY,getMainExecutor(),new TakeScreenshotCallback(){
+            @Override public void onSuccess(ScreenshotResult result) {
+                Bitmap b=Bitmap.wrapHardwareBuffer(result.getHardwareBuffer(),result.getColorSpace());
+                result.getHardwareBuffer().close();
+                if(b==null) {
+                    screenshotBusy=false;
+                    h.postDelayed(()->verifyBidPriceThenConfirm(target,attempt+1),180);
+                    return;
+                }
+
+                Bitmap copy=b.copy(Bitmap.Config.ARGB_8888,false);
+                recognizer.process(InputImage.fromBitmap(copy,0))
+                        .addOnSuccessListener(tx->{
+                            Integer now=extractMoney(textInRegion(tx,
+                                    Prefs.getRegion(AuctionAccessibilityService.this,"price"),
+                                    copy.getWidth(),copy.getHeight()));
+                            copy.recycle();
+                            screenshotBusy=false;
+
+                            if(now==null) {
+                                h.postDelayed(()->verifyBidPriceThenConfirm(target,attempt+1),180);
+                                return;
+                            }
+
+                            lastPrice=now;
+                            refreshOverlay();
+
+                            if(now==target) {
+                                tapSaved("confirm",ok->{
+                                    actionBusy=false;
+                                    if(ok) {
+                                        pending=Pending.CONFIRM;
+                                        pendingRound=round;
+                                        pendingRetries=0;
+                                        pendingAt=System.currentTimeMillis();
+                                        markProgress();
+                                        status("السعر اتأكد "+now+"M ✓ — Confirm، أنتظر الخصم");
+                                    } else {
+                                        status("السعر صحيح لكن Confirm فشل — سأعيد التحقق بدون +");
+                                    }
+                                });
+                            } else if(now<target) {
+                                int missing=target-now;
+                                status("تحقق المزايدة: وصل "+now+"M بدل "+target+"M — أكمل +"+missing);
+                                tapPlusSequence(missing,()->
+                                        h.postDelayed(()->verifyBidPriceThenConfirm(target,attempt+1),220));
+                            } else {
+                                actionBusy=false;
+                                status("حماية: السعر أصبح "+now+"M أعلى من الهدف "+target+
+                                        "M — لم أضغط Confirm");
+                            }
+                        })
+                        .addOnFailureListener(e->{
+                            copy.recycle();
+                            screenshotBusy=false;
+                            h.postDelayed(()->verifyBidPriceThenConfirm(target,attempt+1),180);
+                        });
+            }
+
+            @Override public void onFailure(int errorCode) {
+                screenshotBusy=false;
+                h.postDelayed(()->verifyBidPriceThenConfirm(target,attempt+1),180);
+            }
         });
     }
 
     private void submitConfirm() {
         if(actionBusy) return;
         actionBusy=true;
+        resetCardConsensus();
         tapSaved("confirm",ok->{
             actionBusy=false;
             if(ok) {
                 pending=Pending.CONFIRM; pendingRound=round; pendingRetries=0; pendingAt=System.currentTimeMillis();
+                markProgress();
                 status("Confirm عند Max ✓ — أنتظر الخصم");
             } else status("فشل Confirm");
         });
@@ -605,7 +781,13 @@ public class AuctionAccessibilityService extends AccessibilityService {
         });
     }
 
-    private void clearPending() { pending=Pending.NONE; pendingRetries=0; pendingAt=0; pendingRound=0; }
+    private void clearPending() {
+        pending=Pending.NONE;
+        pendingRetries=0;
+        pendingAt=0;
+        pendingRound=0;
+        resetCardConsensus();
+    }
 
     // ---------- Post auction / simulation / result loop ----------
 
@@ -705,6 +887,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private void onMatchDone() {
         matches++;
+        markProgress();
         Prefs.setMatches(this,matches);
         String mode=Prefs.repeatMode(this);
         if("count".equals(mode) && matches>=Prefs.repeatCount(this)) stopAfterReturn=true;
@@ -928,6 +1111,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private static class CardRead {
         Integer rating;
         String position;
+        Integer price;
         String raw;
     }
 
