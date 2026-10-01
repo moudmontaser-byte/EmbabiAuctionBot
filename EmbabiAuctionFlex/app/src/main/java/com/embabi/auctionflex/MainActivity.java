@@ -23,7 +23,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 public class MainActivity extends Activity {
-    private final EditText[][][] rangeInputs = new EditText[5][3][3];
+    private final EditText[][][] rangeInputs = new EditText[5][Prefs.RANGE_COUNT][3];
     private EditText countInput, timeInput;
     private TextView statusText, calText;
     private Button infiniteBtn, countBtn, timeBtn;
@@ -70,7 +70,7 @@ public class MainActivity extends Activity {
         TextView title=text("EMBABI AUCTION FLEX",25,Color.WHITE,true);
         title.setGravity(Gravity.CENTER);
         root.addView(title);
-        TextView sub=text("5 لاعبين • 3 Rating Ranges لكل لاعب • Max Bid مستقل",13,Color.rgb(155,178,205),false);
+        TextView sub=text("5 لاعبين • 4 Rating Ranges لكل لاعب • Max Bid مستقل",13,Color.rgb(155,178,205),false);
         sub.setGravity(Gravity.CENTER);
         sub.setPadding(0,dp(4),0,dp(14));
         root.addView(sub);
@@ -111,7 +111,7 @@ public class MainActivity extends Activity {
             headers.addView(cellLabel("Max M"),new LinearLayout.LayoutParams(0,dp(30),1.2f));
             box.addView(headers);
 
-            for(int r=0;r<3;r++) {
+            for(int r=0;r<Prefs.RANGE_COUNT;r++) {
                 LinearLayout row=new LinearLayout(this);
                 row.setOrientation(LinearLayout.HORIZONTAL);
                 EditText min=num(String.valueOf(Prefs.getRangeMin(this,s,r)));
@@ -126,7 +126,7 @@ public class MainActivity extends Activity {
                 box.addView(row,marginTop(5));
             }
 
-            TextView note=text("خارج الـ3 Ranges = SKIP • لو أنت تبدأ اللاعب: 1M فقط أولاً ثم Skip",11.5f,Color.rgb(140,163,190),false);
+            TextView note=text("خارج الـ4 Ranges = SKIP • لو أنت تبدأ اللاعب: 1M فقط أولاً ثم Skip",11.5f,Color.rgb(140,163,190),false);
             note.setPadding(0,dp(6),0,0);
             box.addView(note);
             root.addView(box,marginTop(8));
@@ -171,7 +171,7 @@ public class MainActivity extends Activity {
     }
 
     private void saveRanges() {
-        for(int s=0;s<5;s++) for(int r=0;r<3;r++) {
+        for(int s=0;s<5;s++) for(int r=0;r<Prefs.RANGE_COUNT;r++) {
             int mn=parse(rangeInputs[s][r][0],Prefs.getRangeMin(this,s,r));
             int mx=parse(rangeInputs[s][r][1],Prefs.getRangeMax(this,s,r));
             int bid=parse(rangeInputs[s][r][2],Prefs.getMaxBid(this,s,r));
@@ -180,7 +180,7 @@ public class MainActivity extends Activity {
             rangeInputs[s][r][1].setText(String.valueOf(Prefs.getRangeMax(this,s,r)));
             rangeInputs[s][r][2].setText(String.valueOf(Prefs.getMaxBid(this,s,r)));
         }
-        Toast.makeText(this,"تم حفظ 15 Range ✓",Toast.LENGTH_SHORT).show();
+        Toast.makeText(this,"تم حفظ 20 Range ✓",Toast.LENGTH_SHORT).show();
     }
 
     private void saveAll() {
