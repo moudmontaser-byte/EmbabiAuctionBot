@@ -62,6 +62,13 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private int pendingRound=0, pendingRetries=0;
     private long pendingAt=0L;
 
+    // A new player starts with a forced opening round. In that phase the game
+    // disables "Skip Player" and will auto-submit 1M when the timer expires.
+    // If our rating rules say SKIP, remember that decision and wait until the
+    // button is genuinely enabled instead of tapping a disabled control.
+    private boolean skipWhenAllowed=false;
+    private int skipWhenAllowedRound=0;
+
     private int lastRating=-1,lastPrice=-1,lastMax=-1;
     private String lastPosition="—", lastStatus="جاهز";
     private boolean postFlow=false;
@@ -149,6 +156,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         running=true; paused=false; targetPackage=null;
         round=1; matches=0; stopAfterReturn=false; postFlow=false; postStage=0;
         pending=Pending.NONE; pendingRetries=0; actionBusy=false;
+        skipWhenAllowed=false; skipWhenAllowedRound=0;
         startedAt=System.currentTimeMillis();
         Prefs.setCurrentRound(this,1); Prefs.setMatches(this,0); Prefs.setStartedAt(this,startedAt);
         status("RUN — افتح Embabi Games، سأتعرف على الشاشة تلقائياً");
@@ -257,6 +265,28 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void handleAuction(AccessibilityNodeInfo root,String all,Integer guiRound) {
+        // A previously-decided SKIP must survive the forced opening round.
+        if(skipWhenAllowed) {
+            if(guiRound!=null && guiRound!=skipWhenAllowedRound) {
+                skipWhenAllowed=false;
+                skipWhenAllowedRound=0;
+            } else {
+                boolean opening=isOpeningRound(all);
+                boolean skipEnabled=isSkipEnabled(root);
+                if(!opening && skipEnabled && isOurTurn(root,all)) {
+                    status("Skip أصبح متاحًا ✓ — أنفذ قرار التخطي السابق");
+                    skipWhenAllowed=false;
+                    skipWhenAllowedRound=0;
+                    doSkip();
+                } else {
+                    status(opening
+                            ? "لاعب جديد • الدور الافتتاحي: Skip مقفول — أنتظر المزايدة التلقائية 1M"
+                            : "قرار SKIP محفوظ — أنتظر دورنا وفتح زر التخطي");
+                }
+                return;
+            }
+        }
+
         if(pending!=Pending.NONE) {
             if(guiRound!=null && guiRound!=pendingRound) { clearPending(); }
             else if(pending==Pending.CONFIRM && containsAny(all,"انتظار المزايدة","انتظار المزايده","waiting bid")) {
@@ -309,8 +339,25 @@ public class AuctionAccessibilityService extends AccessibilityService {
         return n.isEnabled();
     }
 
+    private boolean isOpeningRound(String all) {
+        return containsAny(all,
+                "الدور الافتتاحي",
+                "مزايدة تلقائية",
+                "مزايده تلقائيه",
+                "opening round",
+                "automatic bid");
+    }
+
+    private boolean isSkipEnabled(AccessibilityNodeInfo root) {
+        AccessibilityNodeInfo skip=findTextNode(root,
+                "تخطي اللاعب","تخطى اللاعب","تخطي","skip player","skip");
+        return skip!=null && skip.isVisibleToUser() && effectiveEnabled(skip);
+    }
+
     private void readCardAndAct(AccessibilityNodeInfo root,String all,Integer guiRound) {
         if(screenshotBusy) return;
+        final boolean openingRound=isOpeningRound(all);
+        final boolean skipEnabled=isSkipEnabled(root);
         screenshotBusy=true;
         takeScreenshot(android.view.Display.DEFAULT_DISPLAY,getMainExecutor(),new TakeScreenshotCallback(){
             @Override public void onSuccess(ScreenshotResult result) {
@@ -331,7 +378,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                                 status("قراءة غير مؤكدة: OVR "+show(rating)+" | "+(pos==null?"?":pos)+" | "+show(price)+"M — لا أضغط");
                                 return;
                             }
-                            verifyPositionAndDecide(rating,pos,price,guiRound);
+                            verifyPositionAndDecide(rating,pos,price,guiRound,openingRound,skipEnabled);
                         })
                         .addOnFailureListener(e->{ copy.recycle(); screenshotBusy=false; status("OCR فشل — بدون ضغط"); });
             }
@@ -341,7 +388,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
         });
     }
 
-    private void verifyPositionAndDecide(int rating,String pos,int price,Integer guiRound) {
+    private void verifyPositionAndDecide(int rating,String pos,int price,Integer guiRound,
+                                         boolean openingRound, boolean skipEnabled) {
         if(guiRound!=null && guiRound>=1 && guiRound<=5 && guiRound!=round) {
             round=guiRound; Prefs.setCurrentRound(this,round);
         }
@@ -367,14 +415,28 @@ public class AuctionAccessibilityService extends AccessibilityService {
         refreshOverlay();
 
         if(maxBid<=0) {
-            status("R"+round+" "+pos+" OVR "+rating+" خارج الـ3 Ranges → SKIP");
-            doSkip();
+            if(openingRound || !skipEnabled) {
+                skipWhenAllowed=true;
+                skipWhenAllowedRound=round;
+                status("R"+round+" "+pos+" OVR "+rating+
+                        " خارج الـ3 Ranges • Skip مقفول في الدور الافتتاحي — أنتظر 1M التلقائية ثم أتخطى");
+            } else {
+                status("R"+round+" "+pos+" OVR "+rating+" خارج الـ3 Ranges → SKIP");
+                doSkip();
+            }
             return;
         }
 
         if(price>maxBid) {
-            status("السعر "+price+"M أعلى من Max "+maxBid+"M → SKIP");
-            doSkip();
+            if(openingRound || !skipEnabled) {
+                skipWhenAllowed=true;
+                skipWhenAllowedRound=round;
+                status("السعر "+price+"M أعلى من Max "+maxBid+
+                        "M لكن Skip غير متاح الآن — أحفظ قرار التخطي وأنتظر");
+            } else {
+                status("السعر "+price+"M أعلى من Max "+maxBid+"M → SKIP");
+                doSkip();
+            }
             return;
         }
 
@@ -400,6 +462,18 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private void doSkip() {
         if(actionBusy) return;
+
+        AccessibilityNodeInfo root=getRootInActiveWindow();
+        String all=root==null?"":normalize(collectText(root));
+        if(root==null || isOpeningRound(all) || !isSkipEnabled(root)) {
+            skipWhenAllowed=true;
+            skipWhenAllowedRound=round;
+            status(isOpeningRound(all)
+                    ? "الدور الافتتاحي — زر Skip مقفول، أنتظر 1M التلقائية"
+                    : "زر Skip غير متاح الآن — قرار التخطي محفوظ");
+            return;
+        }
+
         actionBusy=true;
         tapSaved("skip",ok->{
             actionBusy=false;
