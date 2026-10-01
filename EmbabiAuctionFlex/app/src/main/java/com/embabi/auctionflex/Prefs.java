@@ -7,7 +7,7 @@ import android.graphics.RectF;
 
 public final class Prefs {
     private static final String NAME = "embabi_flex_v20";
-    private static final int CAL_SCHEMA = 21;
+    private static final int CAL_SCHEMA = 32;
     public static final String[] SLOT_NAMES = {"GK", "CB", "CM1", "CM2", "ST"};
     public static final String[] EXPECTED_POSITIONS = {"GK", "CB", "CM", "CM", "ST"};
     public static final int RANGE_COUNT = 4;
