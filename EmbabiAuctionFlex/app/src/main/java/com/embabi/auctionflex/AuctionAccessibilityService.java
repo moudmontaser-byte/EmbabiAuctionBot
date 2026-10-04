@@ -478,7 +478,11 @@ public class AuctionAccessibilityService extends AccessibilityService {
             @Override public void onSuccess(ScreenshotResult result) {
                 Bitmap b=Bitmap.wrapHardwareBuffer(result.getHardwareBuffer(),result.getColorSpace());
                 result.getHardwareBuffer().close();
-                if(b==null){ screenshotBusy=false; status("Screenshot فشل — بدون ضغط"); return; }
+                if(b==null){
+                    screenshotBusy=false;
+                    h.postDelayed(scanOnce,220);
+                    return;
+                }
 
                 Bitmap copy=b.copy(Bitmap.Config.ARGB_8888,false);
 
@@ -522,32 +526,24 @@ public class AuctionAccessibilityService extends AccessibilityService {
                                     return;
                                 }
 
-                                int effectiveRound=(guiRound!=null && guiRound>=1 && guiRound<=5)
-                                        ? guiRound : round;
-                                CardRead stable=addConsensusSample(rating,pos,price,effectiveRound);
-
-                                if(stable==null) {
-                                    status("أثبت القراءة… "+pos+" OVR "+rating+" • "+price+
-                                            "M — أحتاج نفس القراءة مرتين");
-                                    return;
-                                }
-
-                                verifyPositionAndDecide(stable.rating,stable.position,stable.price,
+                                // v34: the yellow line is already the accepted live read.
+                                // Do not wait for a second identical screenshot.
+                                verifyPositionAndDecide(rating,pos,price,
                                         guiRound,openingRound,skipEnabled);
                             });
                         })
                         .addOnFailureListener(e->{
                             copy.recycle();
                             screenshotBusy=false;
-                            resetCardConsensus();
-                            status("قراءة الشاشة فشلت — بدون ضغط، سأعيد المحاولة");
+                            h.postDelayed(scanOnce,220);
                         });
             }
 
             @Override public void onFailure(int errorCode) {
                 screenshotBusy=false;
-                resetCardConsensus();
-                status("تعذر Screenshot ("+errorCode+")");
+                // Error 3 can happen transiently while Android is updating the frame.
+                // Keep the last good yellow read and retry automatically.
+                h.postDelayed(scanOnce,220);
             }
         });
     }
