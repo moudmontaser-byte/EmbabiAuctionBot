@@ -70,6 +70,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
     private int skipWhenAllowedRound=0;
 
     private int lastRating=-1,lastPrice=-1,lastMax=-1;
+    private int verifyLastObservedPrice=-1, verifyStallCount=0;
     private String lastPosition="—", lastStatus="جاهز";
     private boolean postFlow=false;
     private int postStage=0, scrollAttempts=0;
@@ -457,6 +458,75 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 "automatic bid");
     }
 
+    private Boolean controlEnabledAtSavedPoint(AccessibilityNodeInfo root,String key) {
+        if(root==null) return null;
+        int w=getResources().getDisplayMetrics().widthPixels;
+        int h=getResources().getDisplayMetrics().heightPixels;
+        PointF p=Prefs.getTapPointPx(this,key,w,h);
+        if(p==null) return null;
+
+        AccessibilityNodeInfo n=findSmallestNodeAtPoint(root,(int)p.x,(int)p.y,null);
+        if(n==null) return null;
+        return effectiveEnabled(n);
+    }
+
+    private AccessibilityNodeInfo findSmallestNodeAtPoint(AccessibilityNodeInfo n,int x,int y,
+                                                           AccessibilityNodeInfo best) {
+        if(n==null || !n.isVisibleToUser()) return best;
+        Rect r=new Rect();
+        n.getBoundsInScreen(r);
+        if(r.isEmpty() || !r.contains(x,y)) return best;
+
+        if(best==null) {
+            best=n;
+        } else {
+            Rect br=new Rect();
+            best.getBoundsInScreen(br);
+            long a=(long)r.width()*r.height();
+            long ba=(long)br.width()*br.height();
+            if(a>0 && (ba<=0 || a<ba)) best=n;
+        }
+
+        for(int i=0;i<n.getChildCount();i++) {
+            AccessibilityNodeInfo child=n.getChild(i);
+            AccessibilityNodeInfo cand=findSmallestNodeAtPoint(child,x,y,best);
+            if(cand!=null) {
+                Rect cr=new Rect(), rr=new Rect();
+                cand.getBoundsInScreen(cr);
+                best.getBoundsInScreen(rr);
+                long ca=(long)cr.width()*cr.height();
+                long ra=(long)rr.width()*rr.height();
+                if(ca>0 && (ra<=0 || ca<ra)) best=cand;
+            }
+        }
+        return best;
+    }
+
+    private Boolean confirmEnabledOnScreen(AccessibilityNodeInfo root) {
+        if(root==null) return null;
+        AccessibilityNodeInfo n=findTextNode(root,
+                "تأكيد المزايدة","تاكيد المزايده","تأكيد","confirm bid","confirm");
+        if(n!=null && n.isVisibleToUser()) return effectiveEnabled(n);
+        return controlEnabledAtSavedPoint(root,"confirm");
+    }
+
+    private void confirmAtAvailableBudget(int now,int target,String reason) {
+        status(reason+" — Confirm تلقائي عند "+now+"M بدل "+target+"M");
+        tapSaved("confirm",ok->{
+            actionBusy=false;
+            if(ok) {
+                pending=Pending.CONFIRM;
+                pendingRound=round;
+                pendingRetries=0;
+                pendingAt=System.currentTimeMillis();
+                markProgress();
+                status("الـ+ توقف عند "+now+"M وConfirm متاح ✓ — تم التأكيد تلقائيًا");
+            } else {
+                status("الـ+ متوقف لكن Confirm فشل — سأعيد قراءة الحالة");
+            }
+        });
+    }
+
     private boolean isSkipEnabled(AccessibilityNodeInfo root) {
         AccessibilityNodeInfo skip=findTextNode(root,
                 "تخطي اللاعب","تخطى اللاعب","تخطي","skip player","skip");
@@ -600,6 +670,15 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
+        AccessibilityNodeInfo liveRoot=getRootInActiveWindow();
+        Boolean plusEnabled=controlEnabledAtSavedPoint(liveRoot,"plus");
+        Boolean confirmEnabled=confirmEnabledOnScreen(liveRoot);
+        if(Boolean.FALSE.equals(plusEnabled) && Boolean.TRUE.equals(confirmEnabled)) {
+            status("الـ+ غير متاح وConfirm متاح — وصلت للمتاح من الميزانية");
+            submitConfirm();
+            return;
+        }
+
         int step=Prefs.bidStep(maxBid);
         int target=Math.min(maxBid,price+step);
         int clicks=Math.max(0,target-price);
@@ -686,6 +765,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if(actionBusy) return;
         actionBusy=true;
         resetCardConsensus();
+        verifyLastObservedPrice=-1;
+        verifyStallCount=0;
 
         tapPlusSequence(clicks,()->{
             h.postDelayed(()->verifyBidPriceThenConfirm(target,0),260);
@@ -742,6 +823,33 @@ public class AuctionAccessibilityService extends AccessibilityService {
                                     }
                                 });
                             } else if(now<target) {
+                                if(now==verifyLastObservedPrice) verifyStallCount++;
+                                else {
+                                    verifyLastObservedPrice=now;
+                                    verifyStallCount=0;
+                                }
+
+                                AccessibilityNodeInfo liveRoot=getRootInActiveWindow();
+                                Boolean plusEnabled=controlEnabledAtSavedPoint(liveRoot,"plus");
+                                Boolean confirmEnabled=confirmEnabledOnScreen(liveRoot);
+
+                                // Exact requested case: PLUS disabled while Confirm is enabled.
+                                if(Boolean.FALSE.equals(plusEnabled) &&
+                                        Boolean.TRUE.equals(confirmEnabled)) {
+                                    confirmAtAvailableBudget(now,target,
+                                            "وصلت لأقصى مبلغ متاح: زر + غير متاح وConfirm متاح");
+                                    return;
+                                }
+
+                                // Some game builds do not expose the PLUS disabled state to
+                                // Accessibility. If repeated + taps leave the bid unchanged
+                                // twice and Confirm is enabled, treat it as the same budget-cap state.
+                                if(verifyStallCount>=2 && Boolean.TRUE.equals(confirmEnabled)) {
+                                    confirmAtAvailableBudget(now,target,
+                                            "المزايدة ثابتة رغم محاولات + المتكررة وConfirm متاح");
+                                    return;
+                                }
+
                                 int missing=target-now;
                                 status("تحقق المزايدة: وصل "+now+"M بدل "+target+"M — أكمل +"+missing);
                                 tapPlusSequence(missing,()->
