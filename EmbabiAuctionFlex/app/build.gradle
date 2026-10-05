@@ -10,8 +10,8 @@ android {
         applicationId "com.embabi.auctionflex"
         minSdk 30
         targetSdk 35
-        versionCode 370
-        versionName "37.0-budget-cap-confirm"
+        versionCode 380
+        versionName "38.0-six-ranges"
     }
 
     compileOptions {
