@@ -10,8 +10,8 @@ android {
         applicationId "com.embabi.auctionflex"
         minSdk 30
         targetSdk 35
-        versionCode 360
-        versionName "36.0-dynamic-bid-step"
+        versionCode 370
+        versionName "37.0-budget-cap-confirm"
     }
 
     compileOptions {
