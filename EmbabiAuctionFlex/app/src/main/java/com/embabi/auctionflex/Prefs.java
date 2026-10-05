@@ -93,7 +93,13 @@ public final class Prefs {
 
     public static int bidStep(int maxBid) {
         if (maxBid <= 0) return 0;
-        return Math.max(1, (int)Math.ceil(maxBid / 5.0));
+
+        // Default v36 bidding cadence:
+        // - Max <= 50M: spread the bid across ~5 raises.
+        // - Max > 50M: spread the bid across ~9 raises so each jump is smaller.
+        // ceil() keeps whole-million clicks and the caller already caps at Max.
+        double divisor = (maxBid > 50) ? 9.0 : 5.0;
+        return Math.max(1, (int)Math.ceil(maxBid / divisor));
     }
 
     public static void saveRegion(Context c, String key, RectF n) {
