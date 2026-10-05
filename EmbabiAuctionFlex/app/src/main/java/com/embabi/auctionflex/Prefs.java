@@ -10,32 +10,32 @@ public final class Prefs {
     private static final int CAL_SCHEMA = 32;
     public static final String[] SLOT_NAMES = {"GK", "CB", "CM1", "CM2", "ST"};
     public static final String[] EXPECTED_POSITIONS = {"GK", "CB", "CM", "CM", "ST"};
-    public static final int RANGE_COUNT = 4;
+    public static final int RANGE_COUNT = 6;
 
     // Default auction strategy requested by the user.
     // Indexed as [slot][range] for GK, CB, CM1, CM2, ST.
     private static final int[][] DEFAULT_MIN = {
-            {92,90,88,86}, // GK
-            {92,90,88,84}, // CB
-            {92,90,88,85}, // CM1
-            {90,88,86,50}, // CM2
-            {92,89,86,84}  // ST
+            {92,90,88,86,71,70}, // GK
+            {92,90,88,84,71,70}, // CB
+            {92,90,88,85,71,70}, // CM1
+            {90,88,86,50,71,70}, // CM2
+            {92,89,86,84,71,70}  // ST
     };
 
     private static final int[][] DEFAULT_MAX = {
-            {99,91,89,87}, // GK
-            {99,91,89,87}, // CB
-            {99,91,89,87}, // CM1
-            {99,89,87,50}, // CM2
-            {99,91,88,85}  // ST
+            {99,91,89,87,71,70}, // GK
+            {99,91,89,87,71,70}, // CB
+            {99,91,89,87,71,70}, // CM1
+            {99,89,87,50,71,70}, // CM2
+            {99,91,88,85,71,70}  // ST
     };
 
     private static final int[][] DEFAULT_BID = {
-            {45,35,25,20}, // GK
-            {50,42,30,20}, // CB
-            {55,45,35,25}, // CM1
-            {55,45,35,25}, // CM2
-            {65,45,30,10}  // ST
+            {45,35,25,20,0,0}, // GK
+            {50,42,30,20,0,0}, // CB
+            {55,45,35,25,0,0}, // CM1
+            {55,45,35,25,0,0}, // CM2
+            {65,45,30,10,0,0}  // ST
     };
 
     private Prefs() {}
