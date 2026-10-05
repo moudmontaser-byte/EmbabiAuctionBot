@@ -70,7 +70,7 @@ public class MainActivity extends Activity {
         TextView title=text("EMBABI AUCTION FLEX",25,Color.WHITE,true);
         title.setGravity(Gravity.CENTER);
         root.addView(title);
-        TextView sub=text("5 لاعبين • 4 Rating Ranges لكل لاعب • Max Bid مستقل",13,Color.rgb(155,178,205),false);
+        TextView sub=text("5 لاعبين • 6 Rating Ranges لكل لاعب • Max Bid مستقل",13,Color.rgb(155,178,205),false);
         sub.setGravity(Gravity.CENTER);
         sub.setPadding(0,dp(4),0,dp(14));
         root.addView(sub);
@@ -126,7 +126,7 @@ public class MainActivity extends Activity {
                 box.addView(row,marginTop(5));
             }
 
-            TextView note=text("خارج الـ4 Ranges = SKIP • لو أنت تبدأ اللاعب: 1M فقط أولاً ثم Skip",11.5f,Color.rgb(140,163,190),false);
+            TextView note=text("خارج الـ6 Ranges = SKIP • لو أنت تبدأ اللاعب: 1M فقط أولاً ثم Skip",11.5f,Color.rgb(140,163,190),false);
             note.setPadding(0,dp(6),0,0);
             box.addView(note);
             root.addView(box,marginTop(8));
@@ -180,7 +180,7 @@ public class MainActivity extends Activity {
             rangeInputs[s][r][1].setText(String.valueOf(Prefs.getRangeMax(this,s,r)));
             rangeInputs[s][r][2].setText(String.valueOf(Prefs.getMaxBid(this,s,r)));
         }
-        Toast.makeText(this,"تم حفظ 20 Range ✓",Toast.LENGTH_SHORT).show();
+        Toast.makeText(this,"تم حفظ 30 Range ✓",Toast.LENGTH_SHORT).show();
     }
 
     private void saveAll() {
