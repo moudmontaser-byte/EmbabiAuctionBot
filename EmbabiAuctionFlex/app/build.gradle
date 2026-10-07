@@ -10,8 +10,8 @@ android {
         applicationId "com.embabi.auctionflex"
         minSdk 30
         targetSdk 35
-        versionCode 400
-        versionName "40.0-rematch-dismiss"
+        versionCode 410
+        versionName "41.0-watchdog-defaults"
     }
 
     compileOptions {
