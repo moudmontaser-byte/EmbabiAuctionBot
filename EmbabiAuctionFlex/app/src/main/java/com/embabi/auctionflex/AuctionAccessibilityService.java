@@ -907,6 +907,34 @@ public class AuctionAccessibilityService extends AccessibilityService {
     // ---------- Post auction / simulation / result loop ----------
 
     private boolean handlePostFlow(AccessibilityNodeInfo root,String all) {
+        // Rematch popup can appear on the result screen before we scroll to
+        // "العودة للرئيسية". Always reject the rematch first, then continue
+        // the normal post-match flow on the next scan.
+        if(containsAny(all,
+                "جاهز لجولة تانية",
+                "جاهز لجوله تانيه",
+                "جولة تانية",
+                "جوله تانيه",
+                "ready for another round",
+                "play again") &&
+                containsAny(all,
+                        "مش دلوقتي",
+                        "مش دلوقتى",
+                        "not now")) {
+            postFlow=true;
+            postStage=5;
+            clearPending();
+
+            if(clickText(root,
+                    "مش دلوقتي","مش دلوقتى",
+                    "not now")) {
+                status("طلب جولة تانية ظهر ✓ — ضغطت «مش دلوقتي»");
+            } else {
+                status("طلب جولة تانية ظاهر — أحاول ضغط «مش دلوقتي»");
+            }
+            return true;
+        }
+
         // Special fast-win path: opponent disconnects/leaves the match.
         // This screen already contains "العودة للرئيسية", so skip the normal
         // simulation/results sequence and return home immediately.
