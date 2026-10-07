@@ -15,33 +15,48 @@ public final class Prefs {
     // Default auction strategy requested by the user.
     // Indexed as [slot][range] for GK, CB, CM1, CM2, ST.
     private static final int[][] DEFAULT_MIN = {
-            {92,90,88,86,71,70}, // GK
-            {92,90,88,84,71,70}, // CB
-            {92,90,88,85,71,70}, // CM1
-            {90,88,86,50,71,70}, // CM2
-            {92,89,86,84,71,70}  // ST
+            {91,90,87,86,85,50}, // GK
+            {92,90,87,85,83,50}, // CB
+            {92,90,88,86,84,83}, // CM1
+            {92,90,88,86,83,55}, // CM2
+            {92,90,88,86,85,70}  // ST
     };
 
     private static final int[][] DEFAULT_MAX = {
-            {99,91,89,87,71,70}, // GK
-            {99,91,89,87,71,70}, // CB
-            {99,91,89,87,71,70}, // CM1
-            {99,89,87,50,71,70}, // CM2
-            {99,91,88,85,71,70}  // ST
+            {99,90,89,86,85,50}, // GK
+            {99,91,89,86,84,55}, // CB
+            {99,91,89,87,85,83}, // CM1
+            {99,91,89,87,85,61}, // CM2
+            {99,91,89,87,85,70}  // ST
     };
 
     private static final int[][] DEFAULT_BID = {
-            {45,35,25,20,0,0}, // GK
-            {50,42,30,20,0,0}, // CB
-            {55,45,35,25,0,0}, // CM1
-            {55,45,35,25,0,0}, // CM2
-            {65,45,30,10,0,0}  // ST
+            {65,55,45,30,5,2},    // GK
+            {80,75,65,45,20,2},   // CB
+            {85,75,70,50,25,18},  // CM1
+            {85,75,65,50,25,18},  // CM2
+            {100,80,70,35,15,0}   // ST
     };
 
     private Prefs() {}
 
     private static SharedPreferences sp(Context c) {
-        return c.getSharedPreferences(NAME, Context.MODE_PRIVATE);
+        SharedPreferences p=c.getSharedPreferences(NAME, Context.MODE_PRIVATE);
+        ensureRangeDefaultsV41(p);
+        return p;
+    }
+
+    private static void ensureRangeDefaultsV41(SharedPreferences p) {
+        if(p.getInt("range_defaults_version",0)>=41) return;
+        SharedPreferences.Editor e=p.edit();
+        for(int s=0;s<DEFAULT_MIN.length;s++) {
+            for(int r=0;r<RANGE_COUNT;r++) {
+                e.putInt("rmin_"+s+"_"+r,DEFAULT_MIN[s][r]);
+                e.putInt("rmax_"+s+"_"+r,DEFAULT_MAX[s][r]);
+                e.putInt("bid_"+s+"_"+r,DEFAULT_BID[s][r]);
+            }
+        }
+        e.putInt("range_defaults_version",41).apply();
     }
 
     private static int clamp(int v, int lo, int hi) {
