@@ -89,6 +89,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
     // Quality / stability state. Decisions are made only after repeated agreement.
     private boolean auctionActive=false;
     private long lastProgressAt=System.currentTimeMillis();
+    private long lastActionAt=System.currentTimeMillis();
+    private long lastRecoveryCheckAt=0L;
     private final int[] sampleRating={-1,-1,-1};
     private final int[] samplePrice={-1,-1,-1};
     private final int[] sampleRound={-1,-1,-1};
@@ -171,6 +173,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
         skipWhenAllowed=false; skipWhenAllowedRound=0;
         startedAt=System.currentTimeMillis();
         lastProgressAt=startedAt;
+        lastActionAt=startedAt;
+        lastRecoveryCheckAt=0L;
         auctionActive=false;
         resetCardConsensus();
         Prefs.setCurrentRound(this,1); Prefs.setMatches(this,0); Prefs.setStartedAt(this,startedAt);
@@ -203,6 +207,10 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private void markProgress() {
         lastProgressAt=System.currentTimeMillis();
+    }
+
+    private void markAction() {
+        lastActionAt=System.currentTimeMillis();
     }
 
     private void resetCardConsensus() {
@@ -255,7 +263,13 @@ public class AuctionAccessibilityService extends AccessibilityService {
     }
 
     private void analyze() {
-        if(screenshotBusy||actionBusy||System.currentTimeMillis()<actionCooldownUntil) return;
+        long now=System.currentTimeMillis();
+        if(actionBusy && now-lastActionAt>=50_000L) {
+            actionBusy=false;
+            clearPending();
+            resetCardConsensus();
+        }
+        if(screenshotBusy||actionBusy||now<actionCooldownUntil) return;
         AccessibilityNodeInfo root=getRootInActiveWindow();
         if(root==null) { status("أنتظر شاشة اللعبة…"); return; }
 
@@ -286,6 +300,35 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 if(pending!=Pending.NONE && guiRound!=pendingRound) clearPending();
                 resetVisiblePlayerRead();
                 markProgress();
+            }
+        }
+
+        // 50-second inactivity watchdog. Re-read the CURRENT screen instead of
+        // trusting a stale post-match state. The most important recovery is the
+        // home screen: if "العب الآن" is visible, clear stale end-game state and
+        // enter the next game immediately.
+        if(now-lastActionAt>=50_000L && now-lastRecoveryCheckAt>=5_000L) {
+            lastRecoveryCheckAt=now;
+            clearPending();
+            resetCardConsensus();
+
+            if(containsAny(all,"العب الان","العب الآن","play now")) {
+                postFlow=false;
+                postStage=0;
+                scrollAttempts=0;
+                auctionActive=false;
+                skipWhenAllowed=false;
+                skipWhenAllowedRound=0;
+                round=1;
+                Prefs.setCurrentRound(this,1);
+
+                if(stopAfterReturn) {
+                    stopBot("اكتملت المدة/العدد ✓ — رجعنا للرئيسية");
+                    return;
+                }
+
+                status("50 ثانية بدون أكشن — لقيت «العب الآن» وضغطتها");
+                if(clickText(root,"العب الان","العب الآن","play now")) return;
             }
         }
 
@@ -1208,6 +1251,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         Path p=new Path(); p.moveTo(w*.86f,hg*.82f); p.lineTo(w*.86f,hg*.26f);
         GestureDescription g=new GestureDescription.Builder()
                 .addStroke(new GestureDescription.StrokeDescription(p,0,560)).build();
+        markAction();
         actionCooldownUntil=System.currentTimeMillis()+800;
         dispatchGesture(g,new GestureResultCallback(){
             @Override public void onCompleted(GestureDescription d){h.postDelayed(scanOnce,720);}
@@ -1242,7 +1286,11 @@ public class AuctionAccessibilityService extends AccessibilityService {
         if(!accepted && cb!=null) cb.done(false);
     }
 
-    private void cooldown(){ actionCooldownUntil=System.currentTimeMillis()+700; h.postDelayed(scanOnce,760); }
+    private void cooldown(){
+        markAction();
+        actionCooldownUntil=System.currentTimeMillis()+700;
+        h.postDelayed(scanOnce,760);
+    }
 
     // ---------- OCR helpers ----------
 
