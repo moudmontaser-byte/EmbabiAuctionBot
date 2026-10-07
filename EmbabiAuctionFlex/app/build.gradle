@@ -10,8 +10,8 @@ android {
         applicationId "com.embabi.auctionflex"
         minSdk 30
         targetSdk 35
-        versionCode 390
-        versionName "39.0-adaptive-icon"
+        versionCode 400
+        versionName "40.0-rematch-dismiss"
     }
 
     compileOptions {
