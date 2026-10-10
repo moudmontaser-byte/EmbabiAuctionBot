@@ -10,8 +10,8 @@ android {
         applicationId "com.embabi.auctionflex"
         minSdk 30
         targetSdk 35
-        versionCode 440
-        versionName "44.0-playnow-2s-delay"
+        versionCode 450
+        versionName "45.0-new-default-ranges"
     }
 
     compileOptions {
