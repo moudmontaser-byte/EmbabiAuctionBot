@@ -67,7 +67,7 @@ public class MainActivity extends Activity {
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         sv.addView(root,new ScrollView.LayoutParams(-1,-2));
 
-        TextView title=text("EMBABI AUCTION FLEX",25,Color.WHITE,true);
+        TextView title=text("mahmoud montaser",25,Color.WHITE,true);
         title.setGravity(Gravity.CENTER);
         root.addView(title);
         TextView sub=text("5 لاعبين • 6 Rating Ranges لكل لاعب • Max Bid مستقل",13,Color.rgb(155,178,205),false);
