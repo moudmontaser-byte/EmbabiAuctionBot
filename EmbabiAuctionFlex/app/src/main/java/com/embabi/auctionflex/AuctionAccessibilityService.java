@@ -328,7 +328,10 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 }
 
                 status("50 ثانية بدون أكشن — لقيت «العب الآن» وضغطتها");
-                if(clickText(root,"العب الان","العب الآن","play now")) return;
+                if(clickText(root,"العب الان","العب الآن","play now")) {
+                    waitTwoSecondsAfterPlayNow();
+                    return;
+                }
             }
         }
 
@@ -384,7 +387,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
             }
             round=1; Prefs.setCurrentRound(this,1); pending=Pending.NONE;
             status("الرئيسية ✓ — أضغط «العب الآن»");
-            clickText(root,"العب الان","العب الآن","play now");
+            if(clickText(root,"العب الان","العب الآن","play now")) {
+                waitTwoSecondsAfterPlayNow();
+            }
             return;
         }
 
@@ -1348,6 +1353,13 @@ public class AuctionAccessibilityService extends AccessibilityService {
             },null);
         }catch(Exception e){accepted=false;}
         if(!accepted && cb!=null) cb.done(false);
+    }
+
+    private void waitTwoSecondsAfterPlayNow() {
+        markAction();
+        actionCooldownUntil=System.currentTimeMillis()+2000L;
+        h.postDelayed(scanOnce,2060L);
+        status("ضغطت «العب الآن» ✓ — أنتظر ثانيتين لظهور الشاشة التالية");
     }
 
     private void cooldown(){
