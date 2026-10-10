@@ -18,7 +18,7 @@ public final class Prefs {
             {91,90,87,86,85,50}, // GK
             {92,90,87,85,83,50}, // CB
             {92,90,88,86,84,83}, // CM1
-            {92,90,88,86,83,55}, // CM2
+            {92,90,88,86,84,50}, // CM2
             {92,90,88,86,85,70}  // ST
     };
 
@@ -26,15 +26,15 @@ public final class Prefs {
             {99,90,89,86,85,50}, // GK
             {99,91,89,86,84,55}, // CB
             {99,91,89,87,85,83}, // CM1
-            {99,91,89,87,85,61}, // CM2
+            {99,91,89,87,85,50}, // CM2
             {99,91,89,87,85,70}  // ST
     };
 
     private static final int[][] DEFAULT_BID = {
-            {65,55,45,30,5,2},    // GK
-            {80,75,65,45,20,2},   // CB
-            {85,75,70,50,25,18},  // CM1
-            {85,75,65,50,25,18},  // CM2
+            {55,40,30,20,5,2},    // GK
+            {75,62,55,40,20,2},   // CB
+            {85,75,70,55,35,18},  // CM1
+            {85,75,65,50,40,25},  // CM2
             {100,80,70,35,15,0}   // ST
     };
 
@@ -47,7 +47,7 @@ public final class Prefs {
     }
 
     private static void ensureRangeDefaultsV41(SharedPreferences p) {
-        if(p.getInt("range_defaults_version",0)>=41) return;
+        if(p.getInt("range_defaults_version",0)>=45) return;
         SharedPreferences.Editor e=p.edit();
         for(int s=0;s<DEFAULT_MIN.length;s++) {
             for(int r=0;r<RANGE_COUNT;r++) {
@@ -56,7 +56,7 @@ public final class Prefs {
                 e.putInt("bid_"+s+"_"+r,DEFAULT_BID[s][r]);
             }
         }
-        e.putInt("range_defaults_version",41).apply();
+        e.putInt("range_defaults_version",45).apply();
     }
 
     private static int clamp(int v, int lo, int hi) {
