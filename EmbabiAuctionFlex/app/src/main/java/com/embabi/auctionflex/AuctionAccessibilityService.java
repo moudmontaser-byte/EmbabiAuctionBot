@@ -1315,9 +1315,10 @@ public class AuctionAccessibilityService extends AccessibilityService {
         GestureDescription g=new GestureDescription.Builder()
                 .addStroke(new GestureDescription.StrokeDescription(p,0,560)).build();
         markAction();
-        actionCooldownUntil=System.currentTimeMillis()+800;
+        final long delay=postFlow ? 2000L : 800L;
+        actionCooldownUntil=System.currentTimeMillis()+delay;
         dispatchGesture(g,new GestureResultCallback(){
-            @Override public void onCompleted(GestureDescription d){h.postDelayed(scanOnce,720);}
+            @Override public void onCompleted(GestureDescription d){h.postDelayed(scanOnce,delay+60L);}
         },null);
     }
 
@@ -1351,8 +1352,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
 
     private void cooldown(){
         markAction();
-        actionCooldownUntil=System.currentTimeMillis()+700;
-        h.postDelayed(scanOnce,760);
+        long delay=postFlow ? 2000L : 700L;
+        actionCooldownUntil=System.currentTimeMillis()+delay;
+        h.postDelayed(scanOnce,delay+60L);
     }
 
     // ---------- OCR helpers ----------
