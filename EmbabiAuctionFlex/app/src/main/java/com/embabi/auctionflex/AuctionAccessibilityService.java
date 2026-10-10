@@ -356,9 +356,24 @@ public class AuctionAccessibilityService extends AccessibilityService {
             return;
         }
 
+        // Safety: if a wrong game (مثل «أنت هتحور؟») was opened by mistake,
+        // immediately go back to the games hub and retry the auction card.
+        if(!isGamesHub(all) && containsAny(all,
+                "أنت هتحور","انت هتحور",
+                "بحور ولا منجورش","بحور ولا منجورش؟",
+                "you are bluffing","bluff")) {
+            status("دخل لعبة غلط — أرجع وأختار «المزاد» أعلى اليمين");
+            if(performGlobalAction(GLOBAL_ACTION_BACK)) {
+                cooldown();
+            }
+            return;
+        }
+
         if(isGamesHub(all)) {
-            status("الألعاب ✓ — أفتح «المزاد»");
-            clickText(root,"المزاد","auction");
+            status("الألعاب ✓ — أفتح «المزاد» أعلى اليمين فقط");
+            if(!clickAuctionCard(root)) {
+                status("صفحة الألعاب — لم أجد «المزاد» أعلى اليمين بشكل مؤكد");
+            }
             return;
         }
 
@@ -1108,6 +1123,54 @@ public class AuctionAccessibilityService extends AccessibilityService {
         Rect r=new Rect(); n.getBoundsInScreen(r);
         if(r.isEmpty()) return false;
         dispatchTap(r.centerX(),r.centerY(),null);
+        return true;
+    }
+
+    private boolean clickAuctionCard(AccessibilityNodeInfo root) {
+        if(root==null) return false;
+        List<AccessibilityNodeInfo> hits=new ArrayList<>();
+        collectMatching(root,hits,"المزاد","auction");
+
+        int w=getResources().getDisplayMetrics().widthPixels;
+        int hgt=getResources().getDisplayMetrics().heightPixels;
+        AccessibilityNodeInfo best=null;
+        long bestScore=Long.MIN_VALUE;
+
+        for(AccessibilityNodeInfo n:hits) {
+            if(n==null || !n.isVisibleToUser()) continue;
+            String v=normalize(nodeText(n));
+            if(!(v.equals(normalize("المزاد")) || v.equals("auction"))) continue;
+
+            Rect r=new Rect();
+            n.getBoundsInScreen(r);
+            if(r.isEmpty()) continue;
+
+            // The auction tile is the TOP-RIGHT card on the games screen.
+            // Reject lower/right cards such as «أنت هتحور؟».
+            if(r.centerX() < w*.50f) continue;
+            if(r.centerY() > hgt*.48f) continue;
+
+            long score=(long)r.centerX()*4L - (long)r.centerY()*2L;
+            if(best==null || score>bestScore) {
+                best=n;
+                bestScore=score;
+            }
+        }
+
+        if(best!=null) {
+            boolean ok=clickNode(best);
+            if(ok) {
+                status("المزاد أعلى اليمين ✓");
+                return true;
+            }
+        }
+
+        // No blind click on any other card. A conservative fallback taps only
+        // inside the known top-right auction tile region.
+        float x=w*.75f;
+        float y=hgt*.30f;
+        status("أضغط منطقة «المزاد» أعلى اليمين فقط");
+        dispatchTap(x,y,null);
         return true;
     }
 
@@ -1917,7 +1980,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
         box.setBackground(roundBg(Color.argb(235,5,18,32),Color.rgb(40,112,190),13));
 
         LinearLayout head=new LinearLayout(this);head.setGravity(Gravity.CENTER_VERTICAL);
-        TextView drag=text("AUCTION FLEX",12,Color.WHITE,true);
+        TextView drag=text("mahmoud montaser",12,Color.WHITE,true);
         ovState=text("",10.5f,Color.rgb(0,225,145),true);ovState.setGravity(Gravity.CENTER);
         TextView close=text("×",22,Color.rgb(255,105,125),true);close.setGravity(Gravity.CENTER);
         head.addView(drag,new LinearLayout.LayoutParams(0,dp(32),1.2f));
