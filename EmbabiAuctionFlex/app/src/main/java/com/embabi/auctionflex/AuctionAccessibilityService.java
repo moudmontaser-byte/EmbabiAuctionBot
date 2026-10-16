@@ -365,7 +365,7 @@ public class AuctionAccessibilityService extends AccessibilityService {
                 "أنت هتحور","انت هتحور",
                 "بحور ولا منجورش","بحور ولا منجورش؟",
                 "you are bluffing","bluff")) {
-            status("دخل لعبة غلط — أرجع وأختار «المزاد» أعلى اليمين");
+            status("دخل لعبة غلط — أرجع وأختار «المزاد» بالاسم");
             if(performGlobalAction(GLOBAL_ACTION_BACK)) {
                 cooldown();
             }
@@ -373,9 +373,9 @@ public class AuctionAccessibilityService extends AccessibilityService {
         }
 
         if(isGamesHub(all)) {
-            status("الألعاب ✓ — أفتح «المزاد» أعلى اليمين فقط");
+            status("الألعاب ✓ — أبحث عن «المزاد» بالاسم");
             if(!clickAuctionCard(root)) {
-                status("صفحة الألعاب — لم أجد «المزاد» أعلى اليمين بشكل مؤكد");
+                status("صفحة الألعاب — لم أجد «المزاد» بالاسم، لن أضغط عشوائي");
             }
             return;
         }
@@ -1136,10 +1136,8 @@ public class AuctionAccessibilityService extends AccessibilityService {
         List<AccessibilityNodeInfo> hits=new ArrayList<>();
         collectMatching(root,hits,"المزاد","auction");
 
-        int w=getResources().getDisplayMetrics().widthPixels;
-        int hgt=getResources().getDisplayMetrics().heightPixels;
         AccessibilityNodeInfo best=null;
-        long bestScore=Long.MIN_VALUE;
+        long bestArea=Long.MAX_VALUE;
 
         for(AccessibilityNodeInfo n:hits) {
             if(n==null || !n.isVisibleToUser()) continue;
@@ -1150,33 +1148,27 @@ public class AuctionAccessibilityService extends AccessibilityService {
             n.getBoundsInScreen(r);
             if(r.isEmpty()) continue;
 
-            // The auction tile is the TOP-RIGHT card on the games screen.
-            // Reject lower/right cards such as «أنت هتحور؟».
-            if(r.centerX() < w*.50f) continue;
-            if(r.centerY() > hgt*.48f) continue;
-
-            long score=(long)r.centerX()*4L - (long)r.centerY()*2L;
-            if(best==null || score>bestScore) {
+            // The game order can change. Select ONLY the node whose visible
+            // label is exactly «المزاد», regardless of where the card moved.
+            long area=(long)r.width()*r.height();
+            if(best==null || (area>0 && area<bestArea)) {
                 best=n;
-                bestScore=score;
+                bestArea=area;
             }
         }
 
         if(best!=null) {
             boolean ok=clickNode(best);
             if(ok) {
-                status("المزاد أعلى اليمين ✓");
+                status("لقيت «المزاد» بالاسم ✓ — فتحته");
                 return true;
             }
         }
 
-        // No blind click on any other card. A conservative fallback taps only
-        // inside the known top-right auction tile region.
-        float x=w*.75f;
-        float y=hgt*.30f;
-        status("أضغط منطقة «المزاد» أعلى اليمين فقط");
-        dispatchTap(x,y,null);
-        return true;
+        // Never use a blind coordinate fallback here; positions can change and
+        // that could open a different game.
+        status("لم أجد زر «المزاد» بالاسم — لن أضغط لعبة أخرى");
+        return false;
     }
 
     private boolean clickBottomPlay(AccessibilityNodeInfo root) {
